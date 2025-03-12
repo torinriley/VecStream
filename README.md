@@ -7,7 +7,7 @@ A high-performance vector database with similarity search capabilities optimized
 
 ## Overview
 
-VectorRedis is a lightweight, efficient vector database designed for storing, indexing, and retrieving high-dimensional vectors. Perfect for machine learning applications, recommendation systems, semantic search, and more.
+VecStream is a lightweight, efficient vector database designed for storing, indexing, and retrieving high-dimensional vectors. Perfect for machine learning applications, recommendation systems, semantic search, and more.
 
 ## Features
 
@@ -60,7 +60,7 @@ For more detailed information, check out our documentation:
 
 ## Benchmarks
 
-VectorRedis delivers exceptional performance for vector similarity search operations:
+VecStream delivers exceptional performance for vector similarity search operations:
 
 | Dataset Size | Query Time | Memory Usage |
 |--------------|------------|--------------|
