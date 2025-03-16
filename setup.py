@@ -28,15 +28,15 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        "numpy>=1.20.0,<3.0.0",
+        "numpy>=1.20.0",
         "scipy>=1.6.0",
         "scikit-learn>=1.0.0",
         "sentence-transformers>=2.2.0",
         "click>=8.0.0",
         "rich>=10.0.0",
         "tqdm>=4.65.0",
-        "torch>=2.5.1,<2.6.0",
-        "torchvision>=0.20.1,<0.21.0",
+        "torch",
+        "torchvision",
     ],
     entry_points={
         "console_scripts": [
