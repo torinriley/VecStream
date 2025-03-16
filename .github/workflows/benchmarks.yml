@@ -26,6 +26,13 @@ jobs:
     - name: Run benchmarks
       run: |
         pytest benchmarks/ --benchmark-only --benchmark-json=benchmark-results.json
+    - name: Create gh-pages branch if not exists
+      run: |
+        git checkout --orphan gh-pages || git checkout gh-pages
+        git rm -rf . || true
+        git commit --allow-empty -m "Initial gh-pages commit"
+        git push origin gh-pages || git push -u origin gh-pages
+        git checkout main
     - name: Store benchmark result
       uses: benchmark-action/github-action-benchmark@v1
       with:
@@ -37,4 +44,5 @@ jobs:
         alert-threshold: '200%'
         comment-on-alert: true
         fail-on-alert: true
-        alert-comment-cc-users: '@torinriley' 
+        alert-comment-cc-users: '@torinriley'
+        gh-pages-branch: gh-pages 
