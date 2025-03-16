@@ -46,3 +46,4 @@ htmlcov/
 benchmarks/results/
 tests/data/
 .vecstream/ 
+.vscode
