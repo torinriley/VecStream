@@ -1,22 +1,46 @@
+"""
+QueryEngine class for high-level vector query operations.
+"""
+
+from typing import List, Tuple, Optional
+from .index_manager import IndexManager
 import numpy as np
 from scipy.spatial import distance
 
 class QueryEngine:
-    """
-    A class that performs vector similarity searches.
-    """
-    
-    def __init__(self, index_manager):
-        """
-        Initialize with a reference to an IndexManager.
+    """A class for high-level vector query operations."""
+
+    def __init__(self, index_manager: IndexManager):
+        """Initialize the query engine.
         
-        Parameters:
-        -----------
-        index_manager : IndexManager
-            The index manager to use for searches
+        Args:
+            index_manager: IndexManager instance to use for queries
         """
         self.index_manager = index_manager
+
+    def search(self, query: List[float], k: int = 5, threshold: float = 0.0) -> List[Tuple[str, float]]:
+        """Search for similar vectors with optional filtering.
         
+        Args:
+            query: Query vector to find similar vectors for
+            k: Number of similar vectors to return
+            threshold: Minimum similarity score (0 to 1) for results
+            
+        Returns:
+            List of (id, similarity) tuples, sorted by similarity (highest first)
+        """
+        # Update index before searching
+        self.index_manager.update_index()
+        
+        # Get results from index
+        results = self.index_manager.search(query, k)
+        
+        # Filter by threshold
+        if threshold > 0:
+            results = [(id, sim) for id, sim in results if sim >= threshold]
+            
+        return results
+
     def vector_similarity(self, vec1, vec2, metric="cosine"):
         """
         Calculate the similarity between two vectors using the specified metric.
@@ -44,43 +68,4 @@ class QueryEngine:
             return -distance.euclidean(vec1, vec2)
         else:
             raise ValueError(f"Unsupported metric: {metric}")
-            
-    def search(self, query_vector, k=10, metric="cosine"):
-        """
-        Search for the k most similar vectors to the query vector.
-        
-        Parameters:
-        -----------
-        query_vector : array-like
-            The query vector to compare against
-        k : int
-            Number of results to return
-        metric : str
-            Similarity metric to use
-            
-        Returns:
-        --------
-        list of tuples
-            (id, similarity_score) pairs for the k most similar vectors
-        """
-        # Ensure index is up-to-date
-        self.index_manager.update_index()
-        
-        query_vector = np.array(query_vector)
-        results = []
-        
-        # Calculate similarities
-        for i, id in enumerate(self.index_manager.indexed_ids):
-            vec = self.index_manager.vector_store.get(id)
-            similarity = self.vector_similarity(query_vector, vec, metric)
-            results.append((id, similarity))
-            
-        # Sort by similarity (higher is better for cosine similarity)
-        if metric == "cosine":
-            results.sort(key=lambda x: x[1], reverse=True)
-        else:
-            # For distance metrics, lower is better
-            results.sort(key=lambda x: x[1])
-            
-        return results[:k]
 
