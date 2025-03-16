@@ -5,16 +5,16 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="vecstream",
-    version="0.1.1",
+    version="0.2.0",
     author="Torin Etheridge",
-    author_email="torin.etheridge@gmail.com",
+    author_email="torinriley220@gmail.com",
     description="A lightweight, efficient vector database with similarity search capabilities",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/torinetheridge/vecstream",
     packages=find_packages(),
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Topic :: Database :: Database Engines/Servers",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -25,6 +25,7 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Operating System :: OS Independent",
     ],
     python_requires=">=3.8",
     install_requires=[
@@ -35,8 +36,9 @@ setup(
         "click>=8.0.0",
         "rich>=10.0.0",
         "tqdm>=4.65.0",
-        "torch",
-        "torchvision",
+        "torch>=2.0.0",
+        "torchvision>=0.15.0",
+        "pathlib>=1.0.1",
     ],
     entry_points={
         "console_scripts": [

@@ -1,21 +1,49 @@
+"""
+VecStream CLI - A lightweight vector database with similarity search.
+"""
+
 import click
 from rich import print
 from rich.table import Table
 from rich.progress import track
 from sentence_transformers import SentenceTransformer
 import numpy as np
+import os
+from pathlib import Path
 
 from .vector_store import VectorStore
+from .binary_store import BinaryVectorStore
 from .index_manager import IndexManager
 from .query_engine import QueryEngine
-from .persistent_store import PersistentVectorStore
+
+def get_default_store_path():
+    """Get the default storage path based on the OS."""
+    if os.name == 'nt':  # Windows
+        base_dir = os.path.expandvars('%APPDATA%')
+        return os.path.join(base_dir, 'VecStream', 'store')
+    else:  # Unix-like
+        home = str(Path.home())
+        return os.path.join(home, '.vecstream', 'store')
 
 class VecStreamCLI:
-    def __init__(self):
-        self.store = VectorStore()
+    def __init__(self, store_path=None):
+        """Initialize CLI with binary storage.
+        
+        Args:
+            store_path: Optional path to store the vector database.
+                       If not provided, uses the default OS-specific path.
+        """
+        if store_path is None:
+            store_path = get_default_store_path()
+        
+        # Ensure storage directory exists
+        os.makedirs(store_path, exist_ok=True)
+        
+        self.store = BinaryVectorStore(store_path)
         self.index_manager = IndexManager(self.store)
         self.query_engine = QueryEngine(self.index_manager)
         self.model = None
+        self.store_path = store_path
         
     def load_model(self):
         """Load the sentence transformer model if not already loaded."""
@@ -29,7 +57,9 @@ class VecStreamCLI:
         self.load_model()
         return self.model.encode(text)
 
-cli = VecStreamCLI()
+def get_cli(db_path=None):
+    """Get CLI instance with optional custom db path."""
+    return VecStreamCLI(db_path)
 
 @click.group()
 def main():
@@ -39,81 +69,107 @@ def main():
 @main.command()
 @click.argument('text')
 @click.argument('id')
-def add(text: str, id: str):
+@click.option('--db-path', help='Custom database storage path')
+def add(text: str, id: str, db_path: str = None):
     """Add a text entry to the database."""
+    cli = get_cli(db_path)
     vector = cli.encode_text(text)
-    cli.store.add(id, vector)
+    cli.store.add_vector(
+        id=id,
+        vector=vector.tolist(),
+        metadata={"text": text}
+    )
     print(f"[green]Added text with ID '{id}' to the database[/green]")
 
 @main.command()
 @click.argument('id')
-def get(id: str):
-    """Get a vector by its ID."""
-    vector = cli.store.get(id)
-    if vector is None:
-        print(f"[red]No vector found with ID '{id}'[/red]")
-        return
-    
-    table = Table(title=f"Vector {id}")
-    table.add_column("Dimension", justify="right", style="cyan")
-    table.add_column("Value", justify="right", style="green")
-    
-    for i, value in enumerate(vector[:10]):  # Show first 10 dimensions
-        table.add_row(str(i), f"{value:.6f}")
-    
-    if len(vector) > 10:
-        table.add_row("...", "...")
-    
-    print(table)
-    print(f"\nVector shape: {vector.shape}")
+@click.option('--db-path', help='Custom database storage path')
+def get(id: str, db_path: str = None):
+    """Get a text entry from the database."""
+    cli = get_cli(db_path)
+    try:
+        vector, metadata = cli.store.get_vector_with_metadata(id)
+        print(f"\n[bold cyan]Entry {id}:[/bold cyan]")
+        if metadata and "text" in metadata:
+            print(f"Text: {metadata['text']}")
+        print(f"Vector (first 5 dimensions): {vector[:5]}...")
+    except KeyError:
+        print(f"[red]No entry found with ID '{id}'[/red]")
 
 @main.command()
 @click.argument('query_text')
 @click.option('--k', default=5, help='Number of results to return')
 @click.option('--threshold', default=0.0, help='Minimum similarity threshold')
-def search(query_text: str, k: int, threshold: float):
-    """Search for similar vectors."""
+@click.option('--db-path', help='Custom database storage path')
+def search(query_text: str, k: int, threshold: float, db_path: str = None):
+    """Search for similar text entries."""
+    cli = get_cli(db_path)
     query_vector = cli.encode_text(query_text)
-    results = cli.query_engine.search(query_vector, k=k)
+    results = cli.store.search_similar(query_vector.tolist(), k=k)
+    
+    if not results:
+        print("[yellow]No results found[/yellow]")
+        return
     
     table = Table(title="Search Results")
-    table.add_column("ID", style="cyan")
-    table.add_column("Similarity", justify="right", style="green")
+    table.add_column("Score", style="cyan", justify="right")
+    table.add_column("ID", style="green")
+    table.add_column("Text", style="white")
     
-    for id, similarity in results:
-        if similarity >= threshold:
-            table.add_row(id, f"{similarity:.4f}")
+    for doc_id, score in results:
+        if score < threshold:
+            continue
+        _, metadata = cli.store.get_vector_with_metadata(doc_id)
+        text = metadata.get("text", "N/A") if metadata else "N/A"
+        table.add_row(f"{score:.4f}", doc_id, text)
     
     print(table)
 
 @main.command()
 @click.argument('id')
-def remove(id: str):
-    """Remove a vector from the database."""
-    if cli.store.remove(id):
-        print(f"[green]Removed vector with ID '{id}'[/green]")
-    else:
-        print(f"[red]No vector found with ID '{id}'[/red]")
+@click.option('--db-path', help='Custom database storage path')
+def remove(id: str, db_path: str = None):
+    """Remove a text entry from the database."""
+    cli = get_cli(db_path)
+    try:
+        cli.store.remove_vector(id)
+        print(f"[green]Removed entry with ID '{id}' from the database[/green]")
+    except KeyError:
+        print(f"[red]No entry found with ID '{id}'[/red]")
 
 @main.command()
-def clear():
-    """Clear all vectors from the database."""
-    cli.store.clear()
+@click.option('--db-path', help='Custom database storage path')
+def clear(db_path: str = None):
+    """Clear all entries from the database."""
+    cli = get_cli(db_path)
+    cli.store.clear_store()
     print("[green]Database cleared successfully[/green]")
 
 @main.command()
-def info():
-    """Display information about the database."""
-    table = Table(title="VecStream Database Info")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", justify="right", style="green")
+@click.option('--db-path', help='Custom database storage path')
+def info(db_path: str = None):
+    """Show database information."""
+    cli = get_cli(db_path)
+    vectors_size, metadata_size = cli.store.get_store_size()
+    total_size = vectors_size + metadata_size
     
-    table.add_row("Number of vectors", str(len(cli.store)))
-    if len(cli.store) > 0:
-        sample_vector = next(iter(cli.store.vectors.values()))
-        table.add_row("Vector dimensions", str(sample_vector.shape[0]))
+    table = Table(title="Database Information")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    
+    def format_size(size_bytes):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.2f} TB"
+    
+    table.add_row("Storage Location", cli.store_path)
+    table.add_row("Vectors Size", format_size(vectors_size))
+    table.add_row("Metadata Size", format_size(metadata_size))
+    table.add_row("Total Size", format_size(total_size))
     
     print(table)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 

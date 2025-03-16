@@ -47,3 +47,7 @@ benchmarks/results/
 tests/data/
 .vecstream/ 
 .vscode
+vector_db
+test_vectors
+test_env
+.vscode
