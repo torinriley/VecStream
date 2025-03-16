@@ -2,7 +2,6 @@
 
 [![Tests](https://github.com/torinriley/VecStream/actions/workflows/tests.yml/badge.svg)](https://github.com/torinriley/VecStream/actions/workflows/tests.yml)
 [![Benchmarks](https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml)
-[![codecov](https://codecov.io/gh/torinriley/VecStream/branch/main/graph/badge.svg)](https://codecov.io/gh/torinriley/VecStream)
 [![PyPI version](https://badge.fury.io/py/vecstream.svg)](https://badge.fury.io/py/vecstream)
 [![Python versions](https://img.shields.io/pypi/pyversions/vecstream.svg)](https://pypi.org/project/vecstream/)
 [![License](https://img.shields.io/github/license/torinriley/VecStream.svg)](https://github.com/torinriley/VecStream/blob/main/LICENSE)
