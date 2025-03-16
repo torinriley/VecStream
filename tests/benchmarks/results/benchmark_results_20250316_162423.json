@@ -1,0 +1,53 @@
+{
+  "timestamp": "2025-03-16T16:24:04.601378",
+  "benchmarks": [
+    {
+      "operation": "add_vectors",
+      "num_vectors": 1000,
+      "dimension": 384,
+      "total_time": 0.006134986877441406,
+      "vectors_per_second": 162999.5336545935
+    },
+    {
+      "operation": "add_vectors",
+      "num_vectors": 10000,
+      "dimension": 384,
+      "total_time": 0.057238101959228516,
+      "vectors_per_second": 174708.79812057948
+    },
+    {
+      "operation": "add_vectors",
+      "num_vectors": 100000,
+      "dimension": 384,
+      "total_time": 0.5889060497283936,
+      "vectors_per_second": 169806.37241903102
+    },
+    {
+      "operation": "search",
+      "num_vectors": 1000,
+      "dimension": 384,
+      "k": 10,
+      "num_queries": 100,
+      "total_time": 0.13065099716186523,
+      "queries_per_second": 765.397908720962
+    },
+    {
+      "operation": "search",
+      "num_vectors": 10000,
+      "dimension": 384,
+      "k": 10,
+      "num_queries": 100,
+      "total_time": 1.300077199935913,
+      "queries_per_second": 76.91850915078695
+    },
+    {
+      "operation": "search",
+      "num_vectors": 100000,
+      "dimension": 384,
+      "k": 10,
+      "num_queries": 100,
+      "total_time": 13.37088680267334,
+      "queries_per_second": 7.478935501870097
+    }
+  ]
+}
