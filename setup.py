@@ -5,13 +5,13 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="vecstream",
-    version="0.3.2",
+    version="0.3.3",
     author="Torin Etheridge",
     author_email="torinriley220@gmail.com",
     description="A lightweight, efficient vector database with similarity search capabilities",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/torinetheridge/vecstream",
+    url="https://github.com/torinriley/vecstream",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
