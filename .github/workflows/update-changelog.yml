@@ -28,6 +28,11 @@ jobs:
           echo "${{ github.event.pull_request.body }}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Create changelog update branch
+        run: |
+          # Create a new branch for the changelog update
+          git checkout -b changelog-update-pr-${{ github.event.pull_request.number }}
+
       - name: Update CHANGELOG.md
         run: |
           # Get the current date
@@ -84,10 +89,23 @@ jobs:
           ' CHANGELOG.md > CHANGELOG.tmp
           mv CHANGELOG.tmp CHANGELOG.md
 
-      - name: Commit and push changes
+      - name: Commit changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add CHANGELOG.md
           git commit -m "docs: update changelog for PR #${{ github.event.pull_request.number }}"
-          git push 
+
+      - name: Push changes
+        run: |
+          git push origin changelog-update-pr-${{ github.event.pull_request.number }}
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --title "docs: update changelog for PR #${{ github.event.pull_request.number }}" \
+            --body "Automatically updating CHANGELOG.md to include changes from PR #${{ github.event.pull_request.number }}" \
+            --base main \
+            --head changelog-update-pr-${{ github.event.pull_request.number }} 
