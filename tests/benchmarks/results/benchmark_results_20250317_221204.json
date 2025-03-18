@@ -1,0 +1,78 @@
+{
+  "timestamp": "2025-03-17T22:10:37.931558",
+  "benchmarks": [
+    {
+      "operation": "add_vectors",
+      "num_vectors": 1000,
+      "dimension": 384,
+      "total_time": 0.0068950653076171875,
+      "vectors_per_second": 145031.25864453666
+    },
+    {
+      "operation": "add_vectors",
+      "num_vectors": 10000,
+      "dimension": 384,
+      "total_time": 0.07133793830871582,
+      "vectors_per_second": 140177.86660338956
+    },
+    {
+      "operation": "search",
+      "num_vectors": 1000,
+      "dimension": 384,
+      "k": 10,
+      "num_queries": 100,
+      "total_time": 0.15673303604125977,
+      "queries_per_second": 638.0275819685846
+    },
+    {
+      "operation": "search",
+      "num_vectors": 10000,
+      "dimension": 384,
+      "k": 10,
+      "num_queries": 100,
+      "total_time": 1.6680800914764404,
+      "queries_per_second": 59.9491598221094
+    },
+    {
+      "operation": "hnsw_index",
+      "num_vectors": 1000,
+      "dimension": 128,
+      "M": 16,
+      "ef_construction": 200,
+      "k": 10,
+      "num_queries": 100,
+      "add_time": 0.5421199798583984,
+      "search_time": 0.017783641815185547,
+      "vectors_per_second_add": 1844.6101179690882,
+      "queries_per_second": 5623.145193725701
+    },
+    {
+      "operation": "hnsw_index",
+      "num_vectors": 10000,
+      "dimension": 128,
+      "M": 16,
+      "ef_construction": 200,
+      "k": 10,
+      "num_queries": 100,
+      "add_time": 7.078456878662109,
+      "search_time": 0.023868799209594727,
+      "vectors_per_second_add": 1412.7372916750871,
+      "queries_per_second": 4189.56978614166
+    },
+    {
+      "operation": "collections",
+      "num_vectors": 5000,
+      "dimension": 128,
+      "k": 10,
+      "num_queries": 50,
+      "add_time": 76.09976983070374,
+      "search_time": 0.06311297416687012,
+      "filter_search_time": 0.06307291984558105,
+      "nested_filter_time": 0.06317496299743652,
+      "vectors_per_second_add": 65.70322106260387,
+      "queries_per_second": 792.2301342953742,
+      "filter_queries_per_second": 792.733238328161,
+      "nested_filter_queries_per_second": 791.4527785640155
+    }
+  ]
+}

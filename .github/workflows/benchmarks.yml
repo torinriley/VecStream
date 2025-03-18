@@ -25,4 +25,10 @@ jobs:
         pip install -e .
     - name: Run benchmarks
       run: |
-        pytest benchmarks/ --benchmark-only 
+        python3 tests/benchmarks/benchmark_vector_operations.py
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: tests/benchmarks/results/*.json
+        if-no-files-found: warn 
