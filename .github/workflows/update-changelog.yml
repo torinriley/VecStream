@@ -1,0 +1,93 @@
+name: Update Changelog
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  update_changelog:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      
+      - name: Get PR title and description
+        id: pr_info
+        run: |
+          echo "title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ github.event.pull_request.body }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Update CHANGELOG.md
+        run: |
+          # Get the current date
+          DATE=$(date +%Y-%m-%d)
+          
+          # Read the current changelog
+          CHANGELOG=$(cat CHANGELOG.md)
+          
+          # Extract PR title and format it
+          PR_TITLE="${{ steps.pr_info.outputs.title }}"
+          PR_BODY="${{ steps.pr_info.outputs.body }}"
+          
+          # Determine the type of change based on PR title
+          if [[ "$PR_TITLE" =~ ^feat|^feature ]]; then
+            CHANGE_TYPE="### Added"
+          elif [[ "$PR_TITLE" =~ ^fix|^bug ]]; then
+            CHANGE_TYPE="### Fixed"
+          elif [[ "$PR_TITLE" =~ ^change|^refactor ]]; then
+            CHANGE_TYPE="### Changed"
+          elif [[ "$PR_TITLE" =~ ^deprecate ]]; then
+            CHANGE_TYPE="### Deprecated"
+          elif [[ "$PR_TITLE" =~ ^remove ]]; then
+            CHANGE_TYPE="### Removed"
+          elif [[ "$PR_TITLE" =~ ^security ]]; then
+            CHANGE_TYPE="### Security"
+          else
+            CHANGE_TYPE="### Added"
+          fi
+          
+          # Create the new entry
+          NEW_ENTRY="- ${PR_TITLE} (#${{ github.event.pull_request.number }})"
+          
+          # Update the changelog
+          awk -v date="$DATE" -v change_type="$CHANGE_TYPE" -v new_entry="$NEW_ENTRY" '
+          /^## \[Unreleased\]/ {
+            print
+            print ""
+            if (!found_type) {
+              print change_type
+              print new_entry
+              found_type = 1
+            }
+            next
+          }
+          /^### / {
+            if (!found_type && change_type == $0) {
+              print
+              print new_entry
+              found_type = 1
+              next
+            }
+          }
+          { print }
+          ' CHANGELOG.md > CHANGELOG.tmp
+          mv CHANGELOG.tmp CHANGELOG.md
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for PR #${{ github.event.pull_request.number }}"
+          git push 
