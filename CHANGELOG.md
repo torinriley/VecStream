@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- fix: create PR for changelog updates (#26)
+
+### Fixed
 - Fixed metadata filtering in HNSW search by increasing the number of candidates from 100 to 1000 to ensure enough matches are found after filtering
 
 ## [0.3.3] - 2024-03-21
