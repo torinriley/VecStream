@@ -72,7 +72,7 @@ class VecStreamCLI:
         if self.model is None:
             print("[bold cyan]Loading embedding model...[/bold cyan]")
             self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            
+    
     def embed_text(self, text):
         """Embed text using the sentence transformer model."""
         self.load_model()
@@ -307,21 +307,21 @@ def search(ctx, query, k, threshold, collection, filter):
                 return
         
         results = cli_instance.search(query, collection, k, threshold, filter_dict)
-        
-        if not results:
+    
+    if not results:
             print("[yellow]No matching documents found.[/yellow]")
-            return
-        
+        return
+    
         console = Console()
         collection_info = f" in '{collection}'" if collection else ""
         table = Table(title=f"Search Results{collection_info}", show_header=True)
         table.add_column("ID", style="cyan")
         table.add_column("Similarity", style="green")
-        table.add_column("Text", style="white")
-        
+    table.add_column("Text", style="white")
+    
         for id, similarity in results:
             _, metadata = cli_instance.get_document(id, collection)
-            text = metadata.get("text", "N/A") if metadata else "N/A"
+        text = metadata.get("text", "N/A") if metadata else "N/A"
             # Truncate text if too long
             if len(text) > 60:
                 text = text[:57] + "..."
@@ -399,8 +399,8 @@ def info(ctx, collection):
             console = Console()
             table = Table(title=f"Collection: {collection}", show_header=True)
             table.add_column("Property", style="cyan")
-            table.add_column("Value", style="green")
-            
+    table.add_column("Value", style="green")
+    
             for key, value in stats.items():
                 if key in ["vector_count", "dimension", "using_hnsw"]:
                     table.add_row(key, str(value))
