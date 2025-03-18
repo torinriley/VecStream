@@ -101,86 +101,6 @@ results = store.search_similar([1.0, 0.0, 0.0], k=5)
 vector, metadata = store.get_vector_with_metadata("doc1")
 ```
 
-## Advanced Features
-
-### HNSW Indexing
-
-VecStream now implements HNSW (Hierarchical Navigable Small World) indexing for dramatically faster similarity search, especially with large datasets:
-
-```python
-from vecstream.hnsw_index import HNSWIndex
-from vecstream.collections import CollectionManager
-
-# Collections use HNSW by default
-manager = CollectionManager("./vector_db", use_hnsw=True)
-collection = manager.create_collection(
-    "products",
-    hnsw_params={
-        "M": 16,                 # Max connections per node
-        "ef_construction": 200   # Build-time exploration factor
-    }
-)
-
-# Add vectors
-collection.add_vector("product1", [0.5, 0.2, 0.8], {"name": "Desk Lamp"})
-
-# Search with custom ef_search parameter
-results = collection.search_similar(
-    [0.5, 0.2, 0.8], 
-    k=10,
-    ef_search=100  # Search-time exploration factor
-)
-```
-
-### Collections/Namespaces
-
-Organize your vectors into separate collections:
-
-```python
-from vecstream.collections import CollectionManager
-
-# Create a collection manager
-manager = CollectionManager("./vector_db")
-
-# Create different collections
-images = manager.create_collection("images")
-texts = manager.create_collection("texts")
-products = manager.create_collection("products")
-
-# Add vectors to specific collections
-images.add_vector("img1", [...], {"format": "jpg", "size": "1024x768"})
-texts.add_vector("text1", [...], {"language": "en", "word_count": 500})
-
-# List all collections
-collection_names = manager.list_collections()
-
-# Get collection statistics
-stats = manager.get_collection_stats("images")
-```
-
-### Metadata Filtering
-
-Filter search results based on metadata properties:
-
-```python
-# Search with simple metadata filter
-results = collection.search_similar(
-    query_vector,
-    k=5,
-    filter_metadata={"category": "electronics", "in_stock": True}
-)
-
-# Search with nested metadata filter using dot notation
-results = collection.search_similar(
-    query_vector,
-    k=5,
-    filter_metadata={
-        "details.color": "blue",
-        "ratings.average": 4.5
-    }
-)
-```
-
 ## Storage Locations
 
 By default, VecStream stores its data in:
@@ -200,27 +120,45 @@ VecStream uses an efficient binary storage format:
 ## CLI Features
 
 The command-line interface provides:
-- Beautiful, colored output using Rich
-- Progress indicators for long operations
-- Detailed database information
-- Similarity scores in search results
-- Customizable search parameters
-- Collection management
-- Metadata filtering
-- Error handling and user feedback
+- **Vector Management**: Add, get, update and remove vectors with `add`, `get`, and `remove` commands
+- **Similarity Search**: Fast vector search with `search` command with adjustable k-nearest neighbors
+- **HNSW Indexing**: Significantly faster search performance for large datasets (up to 100x faster)
+- **Collections**: Organize vectors by type with `collection create`, `collection list`, and other commands
+- **Metadata Filtering**: Filter search results with `--filter '{"key": "value"}'` syntax
+- **Nested Filters**: Support for dot notation in filters like `--filter '{"details.color": "red"}'`
+- **Beautiful UI**: Rich, colored output and progress indicators for long operations
+- **Database Stats**: View detailed database information with `info` command
+- **Custom Storage**: Specify storage locations with `--db-path` option
 
 ## Python API
 
 The Python API offers:
-- Collections for organizing vectors
-- HNSW indexing for fast search
-- Metadata filtering capabilities 
-- Direct access to vector operations
-- Metadata management
-- Custom storage locations
-- Efficient binary serialization
-- Rich search capabilities
-- Error handling and type safety
+- **HNSW Indexing**: Fast approximate nearest-neighbor search with customizable parameters:
+  ```python
+  from vecstream.hnsw_index import HNSWIndex
+  index = HNSWIndex(dim=128, M=16, ef_construction=200)
+  ```
+- **Collections**: Organize vectors with the CollectionManager:
+  ```python
+  from vecstream.collections import CollectionManager
+  manager = CollectionManager("./vector_db", use_hnsw=True)
+  collection = manager.create_collection("images")
+  ```
+- **Metadata Filtering**: Fine-grained search control:
+  ```python
+  results = collection.search_similar(query, filter_metadata={"category": "electronics"})
+  ```
+- **Nested Filtering**: Access nested properties with dot notation:
+  ```python
+  results = collection.search_similar(query, filter_metadata={"details.color": "black"})
+  ```
+- **Binary Storage**: Efficient serialization for large datasets:
+  ```python
+  from vecstream.binary_store import BinaryVectorStore
+  store = BinaryVectorStore("./vector_db")
+  ```
+- **Vector Operations**: Direct access to similarity calculations, normalization, and more
+- **Type Safety**: Strong typing and error handling with descriptive exceptions
 
 ## Requirements
 
@@ -259,3 +197,21 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
   - Basic vector storage and search functionality
   - CLI interface
   - Client-server architecture
+
+
+
+# Documentation
+
+| Document | Description | Link |
+|----------|-------------|------|
+| API Reference | Complete reference of VecStream's classes, methods, and CLI commands | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md) |
+| Advanced Usage | Detailed examples and best practices for using VecStream | [Advanced Usage](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md) |
+
+## Key Features
+
+| Feature | Description | Documentation |
+|---------|-------------|---------------|
+| HNSW Indexing | Fast approximate nearest neighbor search for large datasets | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#hnswindex), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#hnsw-indexing-for-faster-search) |
+| Collections | Organize vectors with metadata for better organization | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#collection), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#working-with-collections) |
+| Metadata Filtering | Filter search results using metadata properties | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#metadata-filtering), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#advanced-metadata-filtering) |
+| Binary Storage | Efficient storage format for large vector datasets | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#binaryvectorstore), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#binary-storage-for-efficiency) |
