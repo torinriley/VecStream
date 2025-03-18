@@ -5,6 +5,8 @@
 [![PyPI version](https://badge.fury.io/py/vecstream.svg)](https://badge.fury.io/py/vecstream)
 [![Python versions](https://img.shields.io/pypi/pyversions/vecstream.svg)](https://pypi.org/project/vecstream/)
 [![License](https://img.shields.io/github/license/torinriley/VecStream.svg)](https://github.com/torinriley/VecStream/blob/main/LICENSE)
+[![Downloads](https://static.pepy.tech/badge/vecstream)](https://pepy.tech/project/vecstream)
+[![GitHub issues](https://img.shields.io/github/issues/torinriley/VecStream.svg)](https://github.com/torinriley/VecStream/issues)
 
 A lightweight, efficient vector database with similarity search capabilities, designed for machine learning and AI applications.
 
