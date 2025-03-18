@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="vecstream",
-    version="0.3.1",
+    version="0.3.2",
     author="Torin Etheridge",
     author_email="torinriley220@gmail.com",
     description="A lightweight, efficient vector database with similarity search capabilities",
