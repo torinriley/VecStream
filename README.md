@@ -1,14 +1,34 @@
-# VecStream
+<p align="center">
+  <h1 align="center">VecStream</h1>
+  <h3 align="center">
+    A lightweight, efficient vector database with similarity search capabilities, designed for machine learning and AI applications.
+  </h3>
 
-[![Tests](https://github.com/torinriley/VecStream/actions/workflows/tests.yml/badge.svg)](https://github.com/torinriley/VecStream/actions/workflows/tests.yml)
-[![Benchmarks](https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml)
-[![PyPI version](https://badge.fury.io/py/vecstream.svg)](https://badge.fury.io/py/vecstream)
-[![Python versions](https://img.shields.io/pypi/pyversions/vecstream.svg)](https://pypi.org/project/vecstream/)
-[![License](https://img.shields.io/github/license/torinriley/VecStream.svg)](https://github.com/torinriley/VecStream/blob/main/LICENSE)
-[![Downloads](https://static.pepy.tech/badge/vecstream)](https://pepy.tech/project/vecstream)
-[![GitHub issues](https://img.shields.io/github/issues/torinriley/VecStream.svg)](https://github.com/torinriley/VecStream/issues)
+  <p align="center">
+    <a href="https://github.com/torinriley/VecStream/actions/workflows/tests.yml">
+      <img src="https://github.com/torinriley/VecStream/actions/workflows/tests.yml/badge.svg" alt="Tests">
+    </a>
+    <a href="https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml">
+      <img src="https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml/badge.svg" alt="Benchmarks">
+    </a>
+    <a href="https://badge.fury.io/py/vecstream">
+      <img src="https://badge.fury.io/py/vecstream.svg" alt="PyPI version">
+    </a>
+    <a href="https://pypi.org/project/vecstream/">
+      <img src="https://img.shields.io/pypi/pyversions/vecstream.svg" alt="Python versions">
+    </a>
+    <a href="https://github.com/torinriley/VecStream/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/torinriley/VecStream.svg" alt="License">
+    </a>
+    <a href="https://pepy.tech/project/vecstream">
+      <img src="https://static.pepy.tech/badge/vecstream" alt="Downloads">
+    </a>
+    <a href="https://github.com/torinriley/VecStream/issues">
+      <img src="https://img.shields.io/github/issues/torinriley/VecStream.svg" alt="GitHub issues">
+    </a>
+  </p>
+</p>
 
-A lightweight, efficient vector database with similarity search capabilities, designed for machine learning and AI applications.
 
 ## Features
 
