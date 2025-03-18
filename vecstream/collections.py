@@ -112,8 +112,9 @@ class Collection:
         """
         # If using HNSW index
         if self.use_hnsw and self.hnsw_index is not None:
-            results = self.hnsw_index.search(query, k=k if filter_metadata is None else max(k * 10, 100), 
-                                            ef_search=ef_search)
+            # When filtering, get more candidates to ensure we have enough after filtering
+            search_k = k if filter_metadata is None else max(k * 100, 1000)
+            results = self.hnsw_index.search(query, k=search_k, ef_search=ef_search)
             
             # Apply metadata filtering if needed
             if filter_metadata:
