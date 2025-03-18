@@ -51,3 +51,4 @@ vector_db
 test_vectors
 test_env
 .vscode
+vecstream/__pycache__/
