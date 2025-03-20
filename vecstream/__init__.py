@@ -11,15 +11,16 @@ from .index_manager import IndexManager
 from .query_engine import QueryEngine
 from .hnsw_index import HNSWIndex
 from .collections import Collection, CollectionManager
+from .client import ClientAPI
 
 __all__ = [
     "VectorStore",
     "BinaryVectorStore",
     "PersistentVectorStore",
-    "IndexManager", 
+    "IndexManager",
     "QueryEngine",
     "HNSWIndex",
     "Collection",
-    "CollectionManager"
+    "CollectionManager",
+    "ClientAPI",
 ]
-
