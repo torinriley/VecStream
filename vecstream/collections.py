@@ -122,7 +122,15 @@ class Collection:
         # If using HNSW index
         if self.use_hnsw and self.hnsw_index is not None:
             # When filtering, get more candidates to ensure we have enough after filtering
-            search_k = k if filter_metadata is None else max(k * 100, 1000)
+            # Use a much larger k value when filtering with threshold to ensure we find all matches
+            search_k = k
+            if filter_metadata is not None:
+                search_k = max(k * 100, 1000)
+            elif threshold > 0.0:
+                # When only using threshold filtering (no metadata), still use a larger k
+                # to ensure we don't miss potential matches that meet the threshold
+                search_k = max(k * 10, 100)
+                
             results = self.hnsw_index.search(query, k=search_k, ef_search=ef_search)
 
             # Apply metadata filtering if needed
