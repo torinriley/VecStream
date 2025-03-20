@@ -137,7 +137,7 @@ class Collection:
                                 break
                 return filtered_results[:k]
             else:
-                # Just apply threshold and return
+                # Apply threshold and limit to k results
                 return [(id, sim) for id, sim in results if sim >= threshold][:k]
         else:
             # Use regular search from store
