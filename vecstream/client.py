@@ -4,7 +4,7 @@ import numpy as np
 import struct
 
 
-class VectorDBClient:
+class ClientAPI:
     def __init__(self, host="127.0.0.1", port=6379):
         self.host = host
         self.port = port
