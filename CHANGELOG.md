@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- docs: update changelog for PR #26 (#29)
+
+### Added
 - Nightly maintenance (#27)
 
 ### Fixed
