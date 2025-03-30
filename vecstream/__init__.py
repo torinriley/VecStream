@@ -2,7 +2,7 @@
 VecStream - A lightweight vector database with similarity search
 """
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 from .vector_store import VectorStore
 from .binary_store import BinaryVectorStore
