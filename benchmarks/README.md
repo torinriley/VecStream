@@ -1,12 +1,16 @@
 # ANN benchmarks
 
-`ann_benchmark.py` measures VecStream HNSW results against vectorized exact cosine top-k. It reports environment and configuration, build throughput, recall@k, latency percentiles, and QPS while sweeping `ef_search`.
+`ann_benchmark.py` measures HNSW against vectorized exact cosine top-k. It provides three deliberately narrow experiments:
+
+- `frontier`: sweep `ef_search` and report recall/latency.
+- `insertion-order`: index one fixed dataset under independently seeded shuffles.
+- `deletion`: measure baseline, cumulative 5%/10%/20% physical deletion, and rebuild.
 
 ```bash
-python benchmarks/ann_benchmark.py --vectors 10000 --dim 128 --queries 100 \
-  --ef-search 10 20 40 80 160 --seed 42 --output run.json
+python -m benchmarks.ann_benchmark --experiment frontier --vectors 10000 \
+  --dim 128 --queries 100 --ef-search 10 20 40 80 160 --output run.json
+python -m benchmarks.ann_benchmark --experiment insertion-order --ef-search 20
+python -m benchmarks.ann_benchmark --experiment deletion --ef-search 20
 ```
 
-The committed `results/smoke-1000x64-seed42.json` is a small measured regression artifact. It must not be generalized to other hardware, dimensions, distributions, or dataset sizes. Full 10k/100k experiments are manual because this pure-Python implementation builds too slowly for routine CI at those sizes.
-
-Historical graph images in this directory predate the exact-recall harness and are retained only as project history; they are not evidence for current performance claims.
+Dataset, graph-level, insertion-order, and deletion RNG seeds are separate. Each JSON result records the Git revision, Python/NumPy versions, platform, architecture, configuration, and seeds. The three committed 1,000 × 64 results are small measured examples, not claims about other workloads. Full 10k/100k experiments remain manual.

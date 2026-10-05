@@ -36,7 +36,11 @@ def test_diversity_heuristic_does_not_only_choose_nearest():
         "diverse": [0.940, -0.342],
     }.items():
         index.nodes[item_id] = np.asarray(vector, dtype=np.float32)
-        index._normalized_nodes[item_id] = index.nodes[item_id] / np.linalg.norm(index.nodes[item_id])
+        index._normalized_nodes[item_id] = index.nodes[item_id] / np.linalg.norm(
+            index.nodes[item_id]
+        )
     query = np.array([1.0, 0.0], dtype=np.float32)
-    candidates = [(index._normalized_distance(query, index._normalized_nodes[i]), i) for i in index.nodes]
+    candidates = [
+        (index._normalized_distance(query, index._normalized_nodes[i]), i) for i in index.nodes
+    ]
     assert index._select_neighbors(query, candidates, 2) == ["near", "diverse"]

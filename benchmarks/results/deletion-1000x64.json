@@ -1,0 +1,83 @@
+{
+  "environment": {
+    "vecstream_revision": "ea285da89d72a3e9d05e96ac7d760ccb03cdcf4a",
+    "working_tree_dirty": true,
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "processor": "arm",
+    "python": "3.14.3",
+    "numpy": "2.5.3"
+  },
+  "experiment": "deletion",
+  "configuration": {
+    "experiment": "deletion",
+    "vectors": 1000,
+    "queries": 50,
+    "dim": 64,
+    "k": 10,
+    "M": 16,
+    "ef_construction": 100,
+    "ef_search": [
+      20
+    ],
+    "warmups": 5,
+    "dataset_seed": 42,
+    "graph_seed": 43,
+    "order_seeds": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "deletion_seed": 44
+  },
+  "results": {
+    "initial_build_seconds": 7.59150420900005,
+    "rebuild_seconds": 5.429771624998466,
+    "ef_search": 20,
+    "stages": [
+      {
+        "deleted_fraction": 0.0,
+        "remaining_vectors": 1000,
+        "recall@10": 0.908,
+        "p50_ms": 0.7918335,
+        "p99_ms": 0.8779598299999999,
+        "qps": 1266.2045695296988
+      },
+      {
+        "deleted_fraction": 0.05,
+        "remaining_vectors": 950,
+        "recall@10": 0.916,
+        "p50_ms": 0.718459,
+        "p99_ms": 0.81786067,
+        "qps": 1381.205892743672
+      },
+      {
+        "deleted_fraction": 0.1,
+        "remaining_vectors": 900,
+        "recall@10": 0.916,
+        "p50_ms": 0.7032499999999999,
+        "p99_ms": 0.770887,
+        "qps": 1410.7041351942103
+      },
+      {
+        "deleted_fraction": 0.2,
+        "remaining_vectors": 800,
+        "recall@10": 0.916,
+        "p50_ms": 0.6229374999999999,
+        "p99_ms": 0.71083683,
+        "qps": 1591.5921660942295
+      },
+      {
+        "deleted_fraction": 0.2,
+        "remaining_vectors": 800,
+        "state": "rebuilt",
+        "recall@10": 0.954,
+        "p50_ms": 0.7115,
+        "p99_ms": 0.77522308,
+        "qps": 1408.3086832370143
+      }
+    ]
+  }
+}

@@ -15,8 +15,14 @@ from .vector_store import as_float32_vector, normalize
 class HNSWIndex:
     """Approximate cosine search using the HNSW graph algorithm."""
 
-    def __init__(self, dim: int, M: int = 16, ef_construction: int = 200,
-                 ml: int | None = None, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        dim: int,
+        M: int = 16,
+        ef_construction: int = 200,
+        ml: int | None = None,
+        seed: int | None = None,
+    ) -> None:
         if dim < 1 or M < 2 or ef_construction < M:
             raise ValueError("dim >= 1, M >= 2, and ef_construction >= M are required")
         self.dim, self.M, self.M_max0 = dim, M, 2 * M
@@ -69,7 +75,9 @@ class HNSWIndex:
                         heapq.heappop(results)
         return sorted([(-neg_distance, item_id) for neg_distance, item_id in results])
 
-    def _select_neighbors(self, q: np.ndarray, candidates: List[Tuple[float, str]], M: int) -> List[str]:
+    def _select_neighbors(
+        self, q: np.ndarray, candidates: List[Tuple[float, str]], M: int
+    ) -> List[str]:
         """Select close but directionally diverse neighbors (Algorithm 4)."""
         by_id = {item_id: distance for distance, item_id in candidates}
         ordered = sorted(by_id.items(), key=lambda pair: (pair[1], pair[0]))
@@ -77,7 +85,10 @@ class HNSWIndex:
         rejected: List[str] = []
         for candidate_id, query_distance in ordered:
             diverse = all(
-                self._normalized_distance(self._normalized_nodes[candidate_id], self._normalized_nodes[chosen]) > query_distance
+                self._normalized_distance(
+                    self._normalized_nodes[candidate_id], self._normalized_nodes[chosen]
+                )
+                > query_distance
                 for chosen in selected
             )
             (selected if diverse else rejected).append(candidate_id)
@@ -92,7 +103,12 @@ class HNSWIndex:
         if len(graph[node_id]) <= limit:
             return
         candidates = [
-            (self._normalized_distance(self._normalized_nodes[node_id], self._normalized_nodes[neighbor]), neighbor)
+            (
+                self._normalized_distance(
+                    self._normalized_nodes[node_id], self._normalized_nodes[neighbor]
+                ),
+                neighbor,
+            )
             for neighbor in graph[node_id]
         ]
         keep = set(self._select_neighbors(self._normalized_nodes[node_id], candidates, limit))
@@ -146,10 +162,15 @@ class HNSWIndex:
         del self.nodes[id]
         del self._normalized_nodes[id]
         del self.node_levels[id]
-        self.ep = max(self.node_levels, key=lambda item_id: self.node_levels[item_id]) if self.nodes else None
+        self.ep = (
+            max(self.node_levels, key=lambda item_id: self.node_levels[item_id])
+            if self.nodes
+            else None
+        )
 
-    def search(self, query: Sequence[float] | np.ndarray, k: int = 10,
-               ef_search: int | None = None) -> List[Tuple[str, float]]:
+    def search(
+        self, query: Sequence[float] | np.ndarray, k: int = 10, ef_search: int | None = None
+    ) -> List[Tuple[str, float]]:
         if k < 1:
             raise ValueError("k must be at least 1")
         q = normalize(as_float32_vector(query, self.dim))
@@ -169,8 +190,19 @@ class HNSWIndex:
             raise IndexInvariantError("entry point must exist iff graph is non-empty")
         if self.ep is not None and self.ep not in self.nodes:
             raise IndexInvariantError("entry point references a nonexistent node")
-        if set(self.nodes) != set(self.node_levels) or set(self.nodes) != set(self._normalized_nodes):
-            raise IndexInvariantError("nodes, normalized nodes, and node_levels contain different IDs")
+        if self.ep is not None:
+            maximum_level = max(self.node_levels.values())
+            if self.node_levels[self.ep] != maximum_level:
+                raise IndexInvariantError(
+                    f"entry point {self.ep!r} is at level {self.node_levels[self.ep]}, "
+                    f"but maximum node level is {maximum_level}"
+                )
+        if set(self.nodes) != set(self.node_levels) or set(self.nodes) != set(
+            self._normalized_nodes
+        ):
+            raise IndexInvariantError(
+                "nodes, normalized nodes, and node_levels contain different IDs"
+            )
         for item_id, max_level in self.node_levels.items():
             if max_level < 0:
                 raise IndexInvariantError(f"node {item_id!r} has a negative level")
@@ -183,11 +215,32 @@ class HNSWIndex:
                 if item_id not in self.nodes or level > self.node_levels[item_id]:
                     raise IndexInvariantError(f"invalid node {item_id!r} at level {level}")
                 if len(neighbors) > limit:
-                    raise IndexInvariantError(f"degree {len(neighbors)} exceeds {limit} at level {level}")
+                    raise IndexInvariantError(
+                        f"degree {len(neighbors)} exceeds {limit} at level {level}"
+                    )
                 for neighbor in neighbors:
+                    if neighbor == item_id:
+                        raise IndexInvariantError(
+                            f"self-edge for node {item_id!r} at level {level}"
+                        )
                     if neighbor not in self.nodes:
                         raise IndexInvariantError(f"edge references missing node {neighbor!r}")
                     if item_id not in graph.get(neighbor, set()):
-                        raise IndexInvariantError(f"edge {item_id!r}-{neighbor!r} is not bidirectional")
-        if any(not np.all(np.isfinite(vector)) for vector in self.nodes.values()):
-            raise IndexInvariantError("stored vectors must be finite")
+                        raise IndexInvariantError(
+                            f"edge {item_id!r}-{neighbor!r} is not bidirectional"
+                        )
+        for item_id, vector in self.nodes.items():
+            if vector.shape != (self.dim,) or not np.all(np.isfinite(vector)):
+                raise IndexInvariantError(
+                    f"raw vector for node {item_id!r} must be finite with shape ({self.dim},)"
+                )
+            normalized = self._normalized_nodes[item_id]
+            if normalized.shape != (self.dim,) or not np.all(np.isfinite(normalized)):
+                raise IndexInvariantError(
+                    f"normalized vector for node {item_id!r} is malformed or non-finite"
+                )
+            norm = float(np.linalg.norm(normalized.astype(np.float64)))
+            if not (np.isclose(norm, 0.0, atol=1e-7) or np.isclose(norm, 1.0, atol=1e-5)):
+                raise IndexInvariantError(
+                    f"normalized vector for node {item_id!r} has norm {norm}, expected 0 or 1"
+                )

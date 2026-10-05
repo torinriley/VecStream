@@ -20,6 +20,6 @@ Querying greedily descends upper layers, then performs a best-first level-0 sear
 
 Graph vectors are normalized at insertion, making cosine distance `1 - dot(a, b)`. Zero vectors normalize to zero and therefore have similarity zero.
 
-`validate()` checks entry-point, node/level membership, edge target, reciprocal-edge, degree, and finite-value invariants. Level-0 degree is at most `2M`; upper-layer degree is at most `M`.
+`validate()` checks that the entry point occupies the maximum level; IDs agree across raw vectors, normalized vectors, and levels; nodes occupy exactly their allowed levels; edges have existing reciprocal targets; self-edges are absent; degree limits hold; and raw/normalized vectors have valid shapes, finite values, and normalized norms of zero or one. Level-0 degree is at most `2M`; upper-layer degree is at most `M`.
 
 The graph requires vector memory `O(Nd)` and adjacency memory approximately `O(NM)`. Expected search behavior is logarithmic on well-formed data, but HNSW has no worst-case logarithmic guarantee and quality depends on parameters, distribution, and insertion order.

@@ -1,0 +1,82 @@
+{
+  "environment": {
+    "vecstream_revision": "ea285da89d72a3e9d05e96ac7d760ccb03cdcf4a",
+    "working_tree_dirty": true,
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "processor": "arm",
+    "python": "3.14.3",
+    "numpy": "2.5.3"
+  },
+  "experiment": "frontier",
+  "configuration": {
+    "experiment": "frontier",
+    "vectors": 1000,
+    "queries": 50,
+    "dim": 64,
+    "k": 10,
+    "M": 16,
+    "ef_construction": 100,
+    "ef_search": [
+      10,
+      20,
+      40,
+      80,
+      160
+    ],
+    "warmups": 5,
+    "dataset_seed": 42,
+    "graph_seed": 43,
+    "order_seeds": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "deletion_seed": 44
+  },
+  "results": {
+    "build": {
+      "seconds": 7.368972875001418,
+      "vectors_per_second": 135.7041228082696
+    },
+    "search": [
+      {
+        "ef_search": 10,
+        "recall@10": 0.768,
+        "p50_ms": 0.5220625,
+        "p99_ms": 0.6656896599999998,
+        "qps": 1901.921267610745
+      },
+      {
+        "ef_search": 20,
+        "recall@10": 0.908,
+        "p50_ms": 0.7463960000000001,
+        "p99_ms": 0.8570514899999998,
+        "qps": 1327.4483829660974
+      },
+      {
+        "ef_search": 40,
+        "recall@10": 0.99,
+        "p50_ms": 1.106354,
+        "p99_ms": 1.18859933,
+        "qps": 903.4688523963364
+      },
+      {
+        "ef_search": 80,
+        "recall@10": 0.996,
+        "p50_ms": 1.4753545,
+        "p99_ms": 1.6519151699999997,
+        "qps": 673.8146814758736
+      },
+      {
+        "ef_search": 160,
+        "recall@10": 1.0,
+        "p50_ms": 1.7770415,
+        "p99_ms": 1.86097267,
+        "qps": 561.7590671761492
+      }
+    ]
+  }
+}

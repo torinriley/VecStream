@@ -48,7 +48,9 @@ class BinaryVectorStore(VectorStore):
         try:
             pointer = json.loads(self.current_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise CorruptStoreError(f"cannot read checkpoint pointer {self.current_file}: {exc}") from exc
+            raise CorruptStoreError(
+                f"cannot read checkpoint pointer {self.current_file}: {exc}"
+            ) from exc
         candidates = [pointer.get("current"), pointer.get("previous")]
         failures = []
         for generation in filter(None, candidates):
@@ -70,7 +72,11 @@ class BinaryVectorStore(VectorStore):
                 f"format version {manifest.get('format_version')!r} is not supported"
             )
         required = {"dimension", "dtype", "metric", "vector_count"}
-        if not required.issubset(manifest) or manifest["dtype"] != "float32" or manifest["metric"] != "cosine":
+        if (
+            not required.issubset(manifest)
+            or manifest["dtype"] != "float32"
+            or manifest["metric"] != "cosine"
+        ):
             raise InvalidManifestError("manifest fields, dtype, or metric are invalid")
         try:
             ids = json.loads((directory / "ids.json").read_text(encoding="utf-8"))
@@ -79,9 +85,14 @@ class BinaryVectorStore(VectorStore):
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             raise CorruptStoreError(f"checkpoint component is unreadable: {exc}") from exc
         expected_shape = (manifest["vector_count"], manifest["dimension"])
-        if vectors.dtype != np.float32 or vectors.shape != expected_shape or len(ids) != manifest["vector_count"]:
+        if (
+            vectors.dtype != np.float32
+            or vectors.shape != expected_shape
+            or len(ids) != manifest["vector_count"]
+        ):
             raise CorruptStoreError(
-                f"vector checkpoint mismatch: expected {expected_shape} float32, got {vectors.shape} {vectors.dtype}"
+                "vector checkpoint mismatch: "
+                f"expected {expected_shape} float32, got {vectors.shape} {vectors.dtype}"
             )
         if len(ids) != len(set(ids)) or not isinstance(metadata, dict):
             raise CorruptStoreError("IDs must be unique and metadata must be an object")
@@ -98,8 +109,11 @@ class BinaryVectorStore(VectorStore):
         directory.mkdir()
         ids = list(self.vectors)
         dimension = self.dimension or 0
-        matrix = (np.stack([self.vectors[item_id] for item_id in ids]).astype(np.float32)
-                  if ids else np.empty((0, dimension), dtype=np.float32))
+        matrix = (
+            np.stack([self.vectors[item_id] for item_id in ids]).astype(np.float32)
+            if ids
+            else np.empty((0, dimension), dtype=np.float32)
+        )
         try:
             vectors_path = directory / "vectors.npy"
             with vectors_path.open("wb") as handle:
@@ -108,13 +122,16 @@ class BinaryVectorStore(VectorStore):
                 os.fsync(handle.fileno())
             _write_json(directory / "ids.json", ids)
             _write_json(directory / "metadata.json", self.metadata)
-            _write_json(directory / "manifest.json", {
-                "format_version": FORMAT_VERSION,
-                "dimension": dimension,
-                "dtype": "float32",
-                "metric": "cosine",
-                "vector_count": len(ids),
-            })
+            _write_json(
+                directory / "manifest.json",
+                {
+                    "format_version": FORMAT_VERSION,
+                    "dimension": dimension,
+                    "dtype": "float32",
+                    "metric": "cosine",
+                    "vector_count": len(ids),
+                },
+            )
             dir_fd = os.open(directory, os.O_RDONLY)
             try:
                 os.fsync(dir_fd)
@@ -128,8 +145,9 @@ class BinaryVectorStore(VectorStore):
             shutil.rmtree(directory, ignore_errors=True)
             raise
 
-    def add_vector(self, id: str, vector: Sequence[float] | np.ndarray,
-                   metadata: Optional[dict] = None) -> None:
+    def add_vector(
+        self, id: str, vector: Sequence[float] | np.ndarray, metadata: Optional[dict] = None
+    ) -> None:
         old_vector = self.vectors.get(id)
         old_metadata = self.metadata.get(id)
         super().add_vector(id, vector)
@@ -175,5 +193,7 @@ class BinaryVectorStore(VectorStore):
         if self._generation is None:
             return 0, 0
         directory = self.root / self._generation
-        return (directory.joinpath("vectors.npy").stat().st_size,
-                directory.joinpath("metadata.json").stat().st_size)
+        return (
+            directory.joinpath("vectors.npy").stat().st_size,
+            directory.joinpath("metadata.json").stat().st_size,
+        )
