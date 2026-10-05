@@ -6,9 +6,11 @@ import os
 import json
 from typing import Dict, List, Tuple, Optional, Any, Set
 import shutil
+import tempfile
 
 from .binary_store import BinaryVectorStore
 from .hnsw_index import HNSWIndex
+from .errors import CorruptStoreError
 
 
 class Collection:
@@ -267,19 +269,31 @@ class CollectionManager:
         """Load collections metadata from file."""
         if os.path.exists(self.metadata_file):
             try:
-                with open(self.metadata_file, "r") as f:
-                    self.collections_metadata = json.load(f)
-            except Exception as e:
-                print(f"Warning: Failed to load collections metadata: {str(e)}")
-                self.collections_metadata = {}
+                with open(self.metadata_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if not isinstance(loaded, dict):
+                    raise ValueError("top-level value must be an object")
+                self.collections_metadata = loaded
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                raise CorruptStoreError(
+                    f"collection metadata {self.metadata_file!r} is invalid: {exc}"
+                ) from exc
 
     def _save_metadata(self) -> None:
         """Save collections metadata to file."""
+        descriptor, temporary = tempfile.mkstemp(
+            dir=self.base_storage_dir, prefix=".collections-metadata-"
+        )
         try:
-            with open(self.metadata_file, "w") as f:
-                json.dump(self.collections_metadata, f, indent=2)
-        except Exception as e:
-            print(f"Warning: Failed to save collections metadata: {str(e)}")
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(self.collections_metadata, handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.metadata_file)
+        except BaseException:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+            raise
 
     def create_collection(
         self,

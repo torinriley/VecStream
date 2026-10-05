@@ -75,13 +75,13 @@ class VectorDBServer:
                     # Send response with length prefix
                     response_data = json.dumps(response).encode("utf-8")
                     client_socket.send(struct.pack(">I", len(response_data)))
-                    client_socket.send(response_data)
+                    client_socket.sendall(response_data)
 
                 except Exception as e:
                     error_response = {"status": "error", "message": str(e)}
                     response_data = json.dumps(error_response).encode("utf-8")
                     client_socket.send(struct.pack(">I", len(response_data)))
-                    client_socket.send(response_data)
+                    client_socket.sendall(response_data)
         finally:
             client_socket.close()
 
@@ -90,27 +90,27 @@ class VectorDBServer:
         command = request.get("command")
 
         if command == "add":
-            self.store.add(request["id"], np.array(request["vector"]))
+            self.store.add_vector(request["id"], request["vector"])
             return {"status": "success", "message": "Vector added"}
 
         elif command == "get":
-            vector = self.store.get(request["id"])
-            if vector is not None:
-                return {"status": "success", "vector": vector.tolist()}
-            return {"status": "error", "message": "Vector not found"}
+            try:
+                return {"status": "success", "vector": self.store.get_vector(request["id"])}
+            except KeyError:
+                return {"status": "error", "message": "Vector not found"}
 
         elif command == "remove":
-            success = self.store.remove(request["id"])
-            if success:
+            try:
+                self.store.remove_vector(request["id"])
                 return {"status": "success", "message": "Vector removed"}
-            return {"status": "error", "message": "Vector not found"}
+            except KeyError:
+                return {"status": "error", "message": "Vector not found"}
 
         elif command == "search":
             self.index_manager.update_index()
             results = self.query_engine.search(
                 np.array(request["query_vector"]),
                 k=request.get("k", 10),
-                metric=request.get("metric", "cosine"),
             )
             return {
                 "status": "success",
@@ -118,7 +118,9 @@ class VectorDBServer:
             }
 
         elif command == "clear":
-            self.store.clear()
+            self.store.vectors.clear()
+            self.store.dimension = None
+            self.store.save()
             return {"status": "success", "message": "Database cleared"}
 
         else:

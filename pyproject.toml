@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vecstream"
+version = "0.4.0"
+description = "A compact vector-search engine with a from-scratch HNSW implementation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Torin Etheridge"}]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+cli = ["click>=8", "rich>=13"]
+dev = ["hypothesis>=6", "mypy>=1.10", "pytest>=8", "ruff>=0.6"]
+text = ["sentence-transformers>=2.2"]
+
+[project.scripts]
+vecstream = "vecstream.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vecstream*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["vecstream"]
+ignore_missing_imports = true

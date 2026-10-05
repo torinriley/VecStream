@@ -1,142 +1,179 @@
-"""
-Binary persistence layer for VectorStore using NumPy's efficient binary format.
-"""
+"""Versioned, crash-safe local persistence for vectors and metadata."""
 
-import os
+from __future__ import annotations
+
 import json
+import os
+import shutil
+import uuid
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
 import numpy as np
-from typing import List, Tuple, Dict, Optional
+
+from .errors import CorruptStoreError, InvalidManifestError, UnsupportedFormatVersionError
 from .vector_store import VectorStore
+
+FORMAT_VERSION = 1
+
+
+def _write_json(path: Path, value: object) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 class BinaryVectorStore(VectorStore):
-    """Vector store with binary persistence using NumPy's .npy format."""
+    """A VectorStore checkpointed as immutable generations.
 
-    def __init__(self, storage_dir: str):
-        """Initialize the binary vector store.
+    ``CURRENT`` is the only overwritten file. It is atomically replaced after
+    every component of a new generation has been flushed. It records the prior
+    generation, allowing recovery if the newest generation is later damaged.
+    """
 
-        Args:
-            storage_dir: Directory to store the binary files and metadata
-        """
+    def __init__(self, storage_dir: str) -> None:
         super().__init__()
-        self.storage_dir = storage_dir
-        self.metadata_file = os.path.join(storage_dir, "metadata.json")
-        self.vectors_file = os.path.join(storage_dir, "vectors.npy")
+        self.storage_dir = str(storage_dir)
+        self.root = Path(storage_dir)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.current_file = self.root / "CURRENT"
         self.metadata: Dict[str, dict] = {}
-
-        # Create storage directory if it doesn't exist
-        os.makedirs(storage_dir, exist_ok=True)
-
-        # Load existing data if available
+        self._generation: Optional[str] = None
         self._load_store()
 
     def _load_store(self) -> None:
-        """Load vectors and metadata from disk."""
+        if not self.current_file.exists():
+            return
         try:
-            # Load metadata
-            if os.path.exists(self.metadata_file):
-                with open(self.metadata_file, "r") as f:
-                    self.metadata = json.load(f)
+            pointer = json.loads(self.current_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CorruptStoreError(f"cannot read checkpoint pointer {self.current_file}: {exc}") from exc
+        candidates = [pointer.get("current"), pointer.get("previous")]
+        failures = []
+        for generation in filter(None, candidates):
+            try:
+                self._load_generation(str(generation))
+                return
+            except CorruptStoreError as exc:
+                failures.append(f"{generation}: {exc}")
+        raise CorruptStoreError("no valid checkpoint generation; " + "; ".join(failures))
 
-            # Load vectors
-            if os.path.exists(self.vectors_file):
-                loaded_vectors = np.load(self.vectors_file, allow_pickle=True).item()
-                self.vectors = loaded_vectors
-                if self.vectors:
-                    # Set dimension based on first vector
-                    first_vec = next(iter(self.vectors.values()))
-                    self.dimension = len(first_vec)
-        except Exception as e:
-            print(f"Warning: Failed to load store: {str(e)}")
-            self.vectors = {}
-            self.metadata = {}
+    def _load_generation(self, generation: str) -> None:
+        directory = self.root / generation
+        try:
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InvalidManifestError(f"manifest is unreadable: {exc}") from exc
+        if manifest.get("format_version") != FORMAT_VERSION:
+            raise UnsupportedFormatVersionError(
+                f"format version {manifest.get('format_version')!r} is not supported"
+            )
+        required = {"dimension", "dtype", "metric", "vector_count"}
+        if not required.issubset(manifest) or manifest["dtype"] != "float32" or manifest["metric"] != "cosine":
+            raise InvalidManifestError("manifest fields, dtype, or metric are invalid")
+        try:
+            ids = json.loads((directory / "ids.json").read_text(encoding="utf-8"))
+            metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+            vectors = np.load(directory / "vectors.npy", allow_pickle=False)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise CorruptStoreError(f"checkpoint component is unreadable: {exc}") from exc
+        expected_shape = (manifest["vector_count"], manifest["dimension"])
+        if vectors.dtype != np.float32 or vectors.shape != expected_shape or len(ids) != manifest["vector_count"]:
+            raise CorruptStoreError(
+                f"vector checkpoint mismatch: expected {expected_shape} float32, got {vectors.shape} {vectors.dtype}"
+            )
+        if len(ids) != len(set(ids)) or not isinstance(metadata, dict):
+            raise CorruptStoreError("IDs must be unique and metadata must be an object")
+        if not np.all(np.isfinite(vectors)):
+            raise CorruptStoreError("persisted vectors contain NaN or infinity")
+        self.vectors = {str(item_id): vectors[i].copy() for i, item_id in enumerate(ids)}
+        self.metadata = metadata
+        self.dimension = int(manifest["dimension"]) if ids else None
+        self._generation = generation
 
     def _save_store(self) -> None:
-        """Save vectors and metadata to disk."""
+        generation = f"gen-{uuid.uuid4().hex}"
+        directory = self.root / generation
+        directory.mkdir()
+        ids = list(self.vectors)
+        dimension = self.dimension or 0
+        matrix = (np.stack([self.vectors[item_id] for item_id in ids]).astype(np.float32)
+                  if ids else np.empty((0, dimension), dtype=np.float32))
         try:
-            # Save metadata
-            with open(self.metadata_file, "w") as f:
-                json.dump(self.metadata, f)
+            vectors_path = directory / "vectors.npy"
+            with vectors_path.open("wb") as handle:
+                np.save(handle, matrix, allow_pickle=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _write_json(directory / "ids.json", ids)
+            _write_json(directory / "metadata.json", self.metadata)
+            _write_json(directory / "manifest.json", {
+                "format_version": FORMAT_VERSION,
+                "dimension": dimension,
+                "dtype": "float32",
+                "metric": "cosine",
+                "vector_count": len(ids),
+            })
+            dir_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+            temporary = self.root / f".CURRENT-{uuid.uuid4().hex}"
+            _write_json(temporary, {"current": generation, "previous": self._generation})
+            os.replace(temporary, self.current_file)
+            self._generation = generation
+        except BaseException:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
 
-            # Save vectors in binary format
-            np.save(self.vectors_file, self.vectors)
-        except Exception as e:
-            print(f"Warning: Failed to save store: {str(e)}")
-
-    def add_vector(
-        self, id: str, vector: List[float], metadata: Optional[dict] = None
-    ) -> None:
-        """Add a vector with optional metadata.
-
-        Args:
-            id: Unique identifier for the vector
-            vector: List of float values representing the vector
-            metadata: Optional dictionary of metadata associated with the vector
-        """
-        # Add vector to in-memory store
+    def add_vector(self, id: str, vector: Sequence[float] | np.ndarray,
+                   metadata: Optional[dict] = None) -> None:
+        old_vector = self.vectors.get(id)
+        old_metadata = self.metadata.get(id)
         super().add_vector(id, vector)
-
-        # Store metadata if provided
-        if metadata:
+        if metadata is not None:
             self.metadata[id] = metadata
-
-        # Save to disk
-        self._save_store()
+        try:
+            self._save_store()
+        except BaseException:
+            if old_vector is None:
+                self.vectors.pop(id, None)
+                self.metadata.pop(id, None)
+            else:
+                self.vectors[id] = old_vector
+                if old_metadata is None:
+                    self.metadata.pop(id, None)
+                else:
+                    self.metadata[id] = old_metadata
+            raise
 
     def remove_vector(self, id: str) -> None:
-        """Remove a vector and its metadata.
-
-        Args:
-            id: The vector's identifier
-        """
-        # Remove from in-memory store
+        old_vector = self.vectors.get(id)
+        old_metadata = self.metadata.get(id)
         super().remove_vector(id)
-
-        # Remove metadata if exists
         self.metadata.pop(id, None)
-
-        # Save changes to disk
-        self._save_store()
+        try:
+            self._save_store()
+        except BaseException:
+            assert old_vector is not None
+            self.vectors[id] = old_vector
+            self.dimension = int(old_vector.size)
+            if old_metadata is not None:
+                self.metadata[id] = old_metadata
+            raise
 
     def get_vector_with_metadata(self, id: str) -> Tuple[List[float], Optional[dict]]:
-        """Get a vector and its metadata.
-
-        Args:
-            id: The vector's identifier
-
-        Returns:
-            Tuple of (vector, metadata)
-        """
-        vector = self.get_vector(id)
-        metadata = self.metadata.get(id)
-        return vector, metadata
+        return self.get_vector(id), self.metadata.get(id)
 
     def clear_store(self) -> None:
-        """Clear all vectors and metadata from store."""
-        self.vectors = {}
-        self.metadata = {}
-        self.dimension = None
-
-        # Remove files if they exist
-        if os.path.exists(self.metadata_file):
-            os.remove(self.metadata_file)
-        if os.path.exists(self.vectors_file):
-            os.remove(self.vectors_file)
+        self.vectors, self.metadata, self.dimension = {}, {}, None
+        self._save_store()
 
     def get_store_size(self) -> Tuple[int, int]:
-        """Get the size of the store in bytes.
-
-        Returns:
-            Tuple of (vectors_size, metadata_size) in bytes
-        """
-        vectors_size = (
-            os.path.getsize(self.vectors_file)
-            if os.path.exists(self.vectors_file)
-            else 0
-        )
-        metadata_size = (
-            os.path.getsize(self.metadata_file)
-            if os.path.exists(self.metadata_file)
-            else 0
-        )
-        return vectors_size, metadata_size
+        if self._generation is None:
+            return 0, 0
+        directory = self.root / self._generation
+        return (directory.joinpath("vectors.npy").stat().st_size,
+                directory.joinpath("metadata.json").stat().st_size)

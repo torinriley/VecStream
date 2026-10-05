@@ -1,0 +1,14 @@
+name: quality
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e '.[dev,cli]'
+      - run: ruff check --select E9,F63,F7,F82 vecstream tests benchmarks/ann_benchmark.py
+      - run: mypy --follow-imports=skip vecstream/hnsw_index.py vecstream/vector_store.py vecstream/binary_store.py
+      - run: pytest -q
+      - run: python benchmarks/ann_benchmark.py --vectors 500 --queries 10 --dim 32 --ef-search 10 20

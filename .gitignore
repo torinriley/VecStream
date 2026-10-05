@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 env/
 ENV/
 .env
@@ -44,6 +45,9 @@ htmlcov/
 *.idx
 *.db
 benchmarks/results/
+!benchmarks/results/
+benchmarks/results/*
+!benchmarks/results/smoke-1000x64-seed42.json
 tests/data/
 .vecstream/ 
 .vscode
