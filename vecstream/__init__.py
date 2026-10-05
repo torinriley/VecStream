@@ -1,8 +1,8 @@
 """
-VecStream - A lightweight vector database with similarity search
+VecStream - a compact vector-search engine.
 """
 
-__version__ = "0.3.4"
+__version__ = "0.4.0"
 
 from .vector_store import VectorStore
 from .binary_store import BinaryVectorStore
@@ -12,6 +12,14 @@ from .query_engine import QueryEngine
 from .hnsw_index import HNSWIndex
 from .collections import Collection, CollectionManager
 from .client import ClientAPI
+from .errors import (
+    CorruptStoreError,
+    DimensionMismatchError,
+    IndexInvariantError,
+    InvalidManifestError,
+    InvalidVectorError,
+    UnsupportedFormatVersionError,
+)
 
 __all__ = [
     "VectorStore",
@@ -23,4 +31,10 @@ __all__ = [
     "Collection",
     "CollectionManager",
     "ClientAPI",
+    "CorruptStoreError",
+    "DimensionMismatchError",
+    "IndexInvariantError",
+    "InvalidManifestError",
+    "InvalidVectorError",
+    "UnsupportedFormatVersionError",
 ]

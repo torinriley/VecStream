@@ -5,7 +5,8 @@ QueryEngine class for high-level vector query operations.
 from typing import List, Tuple, Optional, Dict, Any
 from .index_manager import IndexManager
 import numpy as np
-from scipy.spatial import distance
+
+from .vector_store import as_float32_vector, normalize
 
 
 class QueryEngine:
@@ -117,12 +118,12 @@ class QueryEngine:
         float
             Similarity score (higher is more similar for cosine, lower for distance metrics)
         """
-        vec1 = np.array(vec1)
-        vec2 = np.array(vec2)
+        vec1 = as_float32_vector(vec1)
+        vec2 = as_float32_vector(vec2, len(vec1))
 
         if metric == "cosine":
-            return 1 - distance.cosine(vec1, vec2)
+            return float(np.dot(normalize(vec1), normalize(vec2)))
         elif metric == "euclidean":
-            return -distance.euclidean(vec1, vec2)
+            return -float(np.linalg.norm(vec1 - vec2))
         else:
             raise ValueError(f"Unsupported metric: {metric}")

@@ -56,7 +56,9 @@ class PersistentVectorStore(VectorStore):
         }
 
         # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
+        parent = os.path.dirname(self.filepath)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
 
         # Save to file
         with open(self.filepath, "w") as f:

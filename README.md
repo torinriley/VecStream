@@ -1,239 +1,91 @@
-<p align="center">
-  <h1 align="center">VecStream</h1>
-  <h3 align="center">
-    A lightweight, efficient vector database with similarity search capabilities, designed for machine learning and AI applications.
-  </h3>
+# VecStream
 
-  <p align="center">
-    <a href="https://github.com/torinriley/VecStream/actions/workflows/tests.yml">
-      <img src="https://github.com/torinriley/VecStream/actions/workflows/tests.yml/badge.svg" alt="Tests">
-    </a>
-    <a href="https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml">
-      <img src="https://github.com/torinriley/VecStream/actions/workflows/benchmarks.yml/badge.svg" alt="Benchmarks">
-    </a>
-    <a href="https://badge.fury.io/py/vecstream">
-      <img src="https://badge.fury.io/py/vecstream.svg" alt="PyPI version">
-    </a>
-    <a href="https://pypi.org/project/vecstream/">
-      <img src="https://img.shields.io/pypi/pyversions/vecstream.svg" alt="Python versions">
-    </a>
-    <a href="https://github.com/torinriley/VecStream/blob/main/LICENSE">
-      <img src="https://img.shields.io/github/license/torinriley/VecStream.svg" alt="License">
-    </a>
-    <a href="https://pepy.tech/project/vecstream">
-      <img src="https://static.pepy.tech/badge/vecstream" alt="Downloads">
-    </a>
-    <a href="https://github.com/torinriley/VecStream/issues">
-      <img src="https://img.shields.io/github/issues/torinriley/VecStream.svg" alt="GitHub issues">
-    </a>
-  </p>
-</p>
+VecStream is a compact vector-search engine centered on a from-scratch HNSW implementation. It is an engineering study of graph construction, ANN recall/latency tradeoffs, exact cosine ground truth, numerical behavior, and crash-safe local persistence. It does not wrap FAISS or hnswlib.
 
+The project is deliberately single-machine and small enough that the important algorithm fits in one module.
 
-## Features
+## What is implemented
 
-- Fast similarity search using optimized indexing
-- HNSW indexing for significantly improved search performance
-- Vector collections/namespaces for organizing different types of embeddings
-- Metadata filtering for fine-grained search control
-- Efficient binary storage format for vectors and metadata
-- Automatic text embedding with sentence-transformers
-- Rich command-line interface with beautiful output
-- Cross-platform support (Windows, macOS, Linux)
-- Customizable storage locations
-- Metadata support for enhanced document management
-- Built-in text similarity search
+- HNSW insertion and query traversal with deterministic seeding
+- exponentially distributed levels with multiplier `1 / ln(M)`
+- diversity-aware neighbor selection and degree-aware reciprocal pruning
+- explicit graph validation via `HNSWIndex.validate()`
+- float32 vectors normalized once for HNSW traversal
+- vectorized exact cosine search as the recall oracle
+- generation-based local checkpoints without pickle
+- recovery to the previous complete checkpoint and explicit corruption errors
+- property tests for randomized graph mutations
+- a reproducible `ef_search` recall/latency benchmark
 
-## Installation
+## Architecture
 
-```bash
-pip install vecstream
+```text
+Collection
+├── BinaryVectorStore: vectors, IDs, metadata, exact search
+└── HNSWIndex: normalized vectors, layered graph, ANN search, validation
 ```
 
-## Quick Start
+`Collection` composes storage and search. `VectorStore.exact_search` is intentionally separate from approximate `HNSWIndex.search`.
 
-### Using the CLI
-
-```bash
-# Add a document
-vecstream add "Machine learning is transforming technology" doc1
-
-# Search for similar documents
-vecstream search "AI and machine learning" --k 3
-
-# Search with metadata filtering
-vecstream search "cloud computing" --filter '{"category": "ai", "year": 2023}'
-
-# Get document by ID
-vecstream get doc1
-
-# View database information
-vecstream info
-
-# Create and use a collection
-vecstream create_collection research
-vecstream add "Neural networks research" doc2 --collection research
-
-# Use custom storage location
-vecstream add "Custom storage test" doc3 --db-path "./my_vectors"
-
-# Remove a document
-vecstream remove doc1
-```
-
-### Using the Python API
+## Example
 
 ```python
-from vecstream.collections import CollectionManager
-from vecstream.binary_store import BinaryVectorStore
+from vecstream import HNSWIndex, VectorStore
 
-# Using collections for different vector types
-manager = CollectionManager("./vector_db")
-research_collection = manager.create_collection("research")
-products_collection = manager.create_collection("products")
+exact = VectorStore()
+ann = HNSWIndex(dim=3, M=16, ef_construction=100, seed=42)
+for item_id, vector in [("x", [1, 0, 0]), ("y", [0, 1, 0])]:
+    exact.add_vector(item_id, vector)
+    ann.add_item(item_id, vector)
 
-# Add vectors with metadata to collections
-research_collection.add_vector(
-    id="paper1",
-    vector=[1.0, 0.0, 0.0],
-    metadata={"topic": "AI", "year": 2023, "author": "Smith"}
-)
-
-# Search with metadata filtering
-results = research_collection.search_similar(
-    query=[1.0, 0.0, 0.0],
-    k=5,
-    filter_metadata={"year": 2023, "topic": "AI"}
-)
-
-# Basic binary store usage (compatible with earlier versions)
-store = BinaryVectorStore("./vector_db")
-
-# Add vectors with metadata
-store.add_vector(
-    id="doc1",
-    vector=[1.0, 0.0, 0.0],
-    metadata={"text": "Example document", "tags": ["test"]}
-)
-
-# Search similar vectors
-results = store.search_similar([1.0, 0.0, 0.0], k=5)
-
-# Get vector with metadata
-vector, metadata = store.get_vector_with_metadata("doc1")
+ann.validate()
+print(ann.search([1, 0.1, 0], k=1, ef_search=40))
 ```
 
-## Storage Locations
+Zero vectors are accepted and have cosine similarity `0.0` to every vector. Empty, non-1-D, wrong-dimension, nonnumeric, NaN, and infinite inputs are rejected. Stored values use float32.
 
-By default, VecStream stores its data in:
-- Windows: `%APPDATA%/VecStream/store/`
-- macOS/Linux: `~/.vecstream/store/`
+## Measured recall/latency frontier
 
-You can specify a custom storage location using the `--db-path` option in CLI commands or by passing the path to `CollectionManager` or `BinaryVectorStore`.
+This is a committed smoke measurement, not a large-scale performance claim: 1,000 Gaussian vectors, 64 dimensions, 50 queries, `M=16`, `ef_construction=100`, seed 42, Python 3.14.3/NumPy 2.5.3 on Apple arm64. Latency is single-query wall time.
 
-## Storage Format
+| ef_search | recall@10 | p50 ms | p99 ms | QPS |
+|---:|---:|---:|---:|---:|
+| 10 | 0.758 | 0.538 | 1.092 | 1,731 |
+| 20 | 0.910 | 0.826 | 1.552 | 1,136 |
+| 40 | 0.988 | 1.241 | 2.298 | 753 |
+| 80 | 0.996 | 1.652 | 2.808 | 567 |
+| 160 | 1.000 | 1.907 | 2.694 | 505 |
 
-VecStream uses an efficient binary storage format:
-- Vectors: NumPy `.npy` format for fast access
-- Metadata: JSON format for flexibility
-- Automatic compression and optimization
-- Collections organized in subdirectories
+Build time was 7.77 s (129 vectors/s). The result demonstrates the expected frontier: greater search effort recovers more exact neighbors while reducing throughput. Full raw output is in [`benchmarks/results/smoke-1000x64-seed42.json`](benchmarks/results/smoke-1000x64-seed42.json). Results are hardware- and dataset-specific.
 
-## CLI Features
+```bash
+python benchmarks/ann_benchmark.py --vectors 10000 --dim 128 --queries 100 \
+  --ef-search 10 20 40 80 160 --seed 42
+```
 
-The command-line interface provides:
-- **Vector Management**: Add, get, update and remove vectors with `add`, `get`, and `remove` commands
-- **Similarity Search**: Fast vector search with `search` command with adjustable k-nearest neighbors
-- **HNSW Indexing**: Significantly faster search performance for large datasets (up to 100x faster)
-- **Collections**: Organize vectors by type with `collection create`, `collection list`, and other commands
-- **Metadata Filtering**: Filter search results with `--filter '{"key": "value"}'` syntax
-- **Nested Filters**: Support for dot notation in filters like `--filter '{"details.color": "red"}'`
-- **Beautiful UI**: Rich, colored output and progress indicators for long operations
-- **Database Stats**: View detailed database information with `info` command
-- **Custom Storage**: Specify storage locations with `--db-path` option
+Use 100,000 vectors and dimensions 128/384/768 for full experiments; those runs are deliberately excluded from CI.
 
-## Python API
+## Storage correctness
 
-The Python API offers:
-- **HNSW Indexing**: Fast approximate nearest-neighbor search with customizable parameters:
-  ```python
-  from vecstream.hnsw_index import HNSWIndex
-  index = HNSWIndex(dim=128, M=16, ef_construction=200)
-  ```
-- **Collections**: Organize vectors with the CollectionManager:
-  ```python
-  from vecstream.collections import CollectionManager
-  manager = CollectionManager("./vector_db", use_hnsw=True)
-  collection = manager.create_collection("images")
-  ```
-- **Metadata Filtering**: Fine-grained search control:
-  ```python
-  results = collection.search_similar(query, filter_metadata={"category": "electronics"})
-  ```
-- **Nested Filtering**: Access nested properties with dot notation:
-  ```python
-  results = collection.search_similar(query, filter_metadata={"details.color": "black"})
-  ```
-- **Binary Storage**: Efficient serialization for large datasets:
-  ```python
-  from vecstream.binary_store import BinaryVectorStore
-  store = BinaryVectorStore("./vector_db")
-  ```
-- **Vector Operations**: Direct access to similarity calculations, normalization, and more
-- **Type Safety**: Strong typing and error handling with descriptive exceptions
+Each mutation writes an immutable `gen-*/` directory containing `manifest.json`, `vectors.npy`, `ids.json`, and `metadata.json`. Files are flushed and fsynced before an atomically replaced `CURRENT` pointer makes the generation visible. The pointer retains the prior generation. On open, VecStream validates version, shape, dtype, IDs, and finite values; it falls back once to the prior complete generation, otherwise raises `CorruptStoreError`. Corruption never becomes an empty database.
 
-## Requirements
+## Development
 
-- Python 3.8 or higher
-- NumPy
-- SciPy
-- sentence-transformers
-- Rich (for CLI)
-- Click (for CLI)
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -e '.[dev,cli]'
+ruff check vecstream tests benchmarks/ann_benchmark.py
+mypy vecstream
+pytest -q
+```
 
-## Contributing
+See [HNSW design](docs/design.md), [limitations](docs/limitations.md), [performance notes](docs/performance.md), and the [repository audit](docs/audit.md).
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## Scope and limitations
+
+VecStream is an educational/research-quality local engine, not a production database. The graph is in memory, mutation/search concurrency is not synchronized, metadata filtering is post-filtered, physical deletion can reduce graph quality, and Python graph traversal is the principal scaling boundary. There is no replication, transaction protocol, distributed execution, or multi-process writer support.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Version History
-
-- 0.3.0 (2024-03-XX)
-  - Added HNSW indexing for faster similarity search
-  - Added collections/namespaces for organizing vectors
-  - Added metadata filtering for search results
-  - Improved CLI with collection management commands
-  - Performance optimizations
-
-- 0.2.0 (2024-03-XX)
-  - Added binary vector store
-  - Improved persistent storage
-  - Enhanced CLI functionality
-  - Added metadata support
-
-- 0.1.0 (2024-03-XX)
-  - Initial release
-  - Basic vector storage and search functionality
-  - CLI interface
-  - Client-server architecture
-
-
-
-# Documentation
-
-| Document | Description | Link |
-|----------|-------------|------|
-| API Reference | Complete reference of VecStream's classes, methods, and CLI commands | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md) |
-| Advanced Usage | Detailed examples and best practices for using VecStream | [Advanced Usage](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md) |
-
-## Key Features
-
-| Feature | Description | Documentation |
-|---------|-------------|---------------|
-| HNSW Indexing | Fast approximate nearest neighbor search for large datasets | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#hnswindex), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#hnsw-indexing-for-faster-search) |
-| Collections | Organize vectors with metadata for better organization | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#collection), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#working-with-collections) |
-| Metadata Filtering | Filter search results using metadata properties | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#metadata-filtering), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#advanced-metadata-filtering) |
-| Binary Storage | Efficient storage format for large vector datasets | [API Reference](https://github.com/torinriley/VecStream/blob/main/docs/api_reference.md#binaryvectorstore), [Usage Examples](https://github.com/torinriley/VecStream/blob/main/docs/advanced_usage.md#binary-storage-for-efficiency) |
+MIT

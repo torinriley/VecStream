@@ -1,38 +1,12 @@
-# VecStream Performance Benchmarks
+# ANN benchmarks
 
-## Overview
-This report presents performance metrics for the VecStream vector database system, demonstrating its efficiency in handling vector storage and similarity search operations.
+`ann_benchmark.py` measures VecStream HNSW results against vectorized exact cosine top-k. It reports environment and configuration, build throughput, recall@k, latency percentiles, and QPS while sweeping `ef_search`.
 
-## Insertion Performance
-![Insertion Performance](graphs/insertion_performance.png)
+```bash
+python benchmarks/ann_benchmark.py --vectors 10000 --dim 128 --queries 100 \
+  --ef-search 10 20 40 80 160 --seed 42 --output run.json
+```
 
-The graph above shows the time taken to insert different numbers of vectors into the database. Key observations:
-- Linear scaling with dataset size
-- Average insertion time per vector: 0.0133 seconds
+The committed `results/smoke-1000x64-seed42.json` is a small measured regression artifact. It must not be generalized to other hardware, dimensions, distributions, or dataset sizes. Full 10k/100k experiments are manual because this pure-Python implementation builds too slowly for routine CI at those sizes.
 
-## Memory Usage
-![Memory Usage](graphs/memory_usage.png)
-
-Memory efficiency analysis:
-- Memory usage scales linearly with data size
-- Average memory per vector: 0.76 MB
-
-## Query Performance
-![Query Performance](graphs/query_performance.png)
-
-Query performance metrics:
-- Base query time: 0.0082 seconds
-- Scaling factor with k: -0.000082 seconds per additional result
-
-## Technical Specifications
-- Embedding Model: all-MiniLM-L6-v2
-- Vector Dimension: 384
-- Storage Backend: File-based persistence
-- Similarity Metric: Cosine similarity
-
-## Conclusion
-VecStream demonstrates efficient performance characteristics:
-1. Near-linear scaling for insertions
-2. Consistent memory usage patterns
-3. Fast query response times
-4. Excellent scalability for different result set sizes
+Historical graph images in this directory predate the exact-recall harness and are retained only as project history; they are not evidence for current performance claims.

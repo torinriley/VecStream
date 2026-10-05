@@ -1,305 +1,193 @@
-"""
-HNSW (Hierarchical Navigable Small World) index implementation for efficient approximate nearest neighbor search.
-"""
+"""A compact, from-scratch Hierarchical Navigable Small World index."""
+
+from __future__ import annotations
+
+import heapq
+import math
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
-from typing import List, Tuple, Dict, Set, Optional
-import heapq
-import random
+
+from .errors import IndexInvariantError
+from .vector_store import as_float32_vector, normalize
 
 
 class HNSWIndex:
-    """HNSW index for efficient approximate nearest neighbor search."""
+    """Approximate cosine search using the HNSW graph algorithm."""
 
-    def __init__(
-        self, dim: int, M: int = 16, ef_construction: int = 200, ml: int = None
-    ):
-        """Initialize HNSW index.
-
-        Args:
-            dim: Dimensionality of vectors
-            M: Maximum number of connections per node (default: 16)
-            ef_construction: Size of dynamic candidate list for index construction (default: 200)
-            ml: Maximum level for the graph (if None, computed automatically)
-        """
-        self.dim = dim
-        self.M = M
-        self.M_max0 = M * 2  # Max connections for layer 0 (typically 2*M)
-        self.ef_construction = ef_construction
-        self.ml = (
-            ml if ml is not None else int(np.log2(1000))
-        )  # Max level, calculated based on expected DB size
-
-        # Graph data structures
-        self.nodes: Dict[str, np.ndarray] = {}  # ID -> vector
-        self.node_levels: Dict[str, int] = {}  # ID -> level
+    def __init__(self, dim: int, M: int = 16, ef_construction: int = 200,
+                 ml: int | None = None, seed: int | None = None) -> None:
+        if dim < 1 or M < 2 or ef_construction < M:
+            raise ValueError("dim >= 1, M >= 2, and ef_construction >= M are required")
+        self.dim, self.M, self.M_max0 = dim, M, 2 * M
+        self.ef_construction, self.ml = ef_construction, ml
+        # P(level >= l) = exp(-l / multiplier) = M**(-l).
+        self.level_multiplier = 1.0 / math.log(M)
+        self._rng = np.random.default_rng(seed)
+        self.nodes: Dict[str, np.ndarray] = {}
+        self._normalized_nodes: Dict[str, np.ndarray] = {}
+        self.node_levels: Dict[str, int] = {}
         self.graphs: Dict[int, Dict[str, Set[str]]] = (
-            {}
-        )  # level -> (id -> set of neighbor IDs)
-
-        # Initialize empty graphs for each level
-        for level in range(self.ml + 1):
-            self.graphs[level] = {}
-
-        # Entry point
-        self.ep = None  # ID of entry point
+            {level: {} for level in range(ml + 1)} if ml is not None else {}
+        )
+        self.ep: Optional[str] = None
 
     def _get_random_level(self) -> int:
-        """Assign a random level to a new element using exponential distribution."""
-        return int(-np.log(random.random()) * self.M / self.M_max0)
+        sample = max(float(self._rng.random()), np.finfo(float).tiny)
+        level = int(-math.log(sample) * self.level_multiplier)
+        return min(level, self.ml) if self.ml is not None else level
 
     def _distance(self, a: np.ndarray, b: np.ndarray) -> float:
-        """Calculate distance between vectors (1 - cosine similarity)."""
-        a_norm = np.linalg.norm(a)
-        b_norm = np.linalg.norm(b)
+        a_value = normalize(as_float32_vector(a, self.dim))
+        b_value = normalize(as_float32_vector(b, self.dim))
+        return self._normalized_distance(a_value, b_value)
 
-        if a_norm == 0 or b_norm == 0:
-            return 1.0
+    @staticmethod
+    def _normalized_distance(a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.clip(1.0 - np.dot(a, b), 0.0, 2.0))
 
-        cos_sim = np.dot(a, b) / (a_norm * b_norm)
-        # Convert similarity to distance (1 - similarity), clamping to [0, 2]
-        return max(0.0, min(2.0, 1.0 - cos_sim))
-
-    def _search_layer(
-        self, q: np.ndarray, ep: str, ef: int, level: int
-    ) -> List[Tuple[float, str]]:
-        """Search for nearest neighbors in a single layer.
-
-        Args:
-            q: Query vector
-            ep: Entry point ID
-            ef: Size of dynamic candidate list
-            level: Level to search
-
-        Returns:
-            List of (distance, id) tuples for nearest neighbors
-        """
-        # Set of visited elements
-        visited = set([ep])
-
-        # Priority queue for the candidate set, sorted by distance
-        # Use a min-heap for candidates we're expanding (smaller distances first)
-        candidates = [(self._distance(q, self.nodes[ep]), ep)]
-        heapq.heapify(candidates)
-
-        # Use a max-heap for results (larger distances are popped first when exceeding ef)
-        results = [(-self._distance(q, self.nodes[ep]), ep)]
-        heapq.heapify(results)
-
+    def _search_layer(self, q: np.ndarray, ep: str, ef: int, level: int) -> List[Tuple[float, str]]:
+        if ef < 1 or ep not in self.nodes:
+            return []
+        initial = self._normalized_distance(q, self._normalized_nodes[ep])
+        candidates: List[Tuple[float, str]] = [(initial, ep)]
+        results: List[Tuple[float, str]] = [(-initial, ep)]
+        visited = {ep}
         while candidates:
-            c_dist, c_id = heapq.heappop(candidates)
-
-            # Get the farthest result distance (negative because we use max-heap)
-            furthest_dist = -results[0][0] if results else float("inf")
-
-            # If candidate is farther than our worst result, we're done
-            if c_dist > furthest_dist and len(results) >= ef:
+            candidate_distance, candidate_id = heapq.heappop(candidates)
+            if len(results) >= ef and candidate_distance > -results[0][0]:
                 break
+            for neighbor in self.graphs.get(level, {}).get(candidate_id, set()):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                distance = self._normalized_distance(q, self._normalized_nodes[neighbor])
+                if len(results) < ef or distance < -results[0][0]:
+                    heapq.heappush(candidates, (distance, neighbor))
+                    heapq.heappush(results, (-distance, neighbor))
+                    if len(results) > ef:
+                        heapq.heappop(results)
+        return sorted([(-neg_distance, item_id) for neg_distance, item_id in results])
 
-            # Process neighbors of current candidate
-            for neighbor_id in self.graphs[level].get(c_id, set()):
-                if neighbor_id not in visited:
-                    visited.add(neighbor_id)
-                    d = self._distance(q, self.nodes[neighbor_id])
-
-                    # If we haven't filled our results yet, or this is closer than the worst result
-                    if len(results) < ef or d < furthest_dist:
-                        heapq.heappush(candidates, (d, neighbor_id))
-                        heapq.heappush(results, (-d, neighbor_id))
-
-                        # If we've exceeded ef, remove the worst element
-                        if len(results) > ef:
-                            heapq.heappop(results)
-
-        # Convert results to (distance, id) format, sorted by distance
-        return [
-            (self._distance(q, self.nodes[id]), id)
-            for _, id in sorted([(d, id) for d, id in results])
-        ]
-
-    def _select_neighbors(
-        self, q: np.ndarray, candidates: List[Tuple[float, str]], M: int
-    ) -> List[str]:
-        """Select the M closest neighbors from candidates.
-
-        Args:
-            q: Query vector
-            candidates: List of (distance, id) tuples
-            M: Maximum number of neighbors to return
-
-        Returns:
-            List of selected neighbor IDs
-        """
-        # Simple heuristic: just select M closest neighbors
-        candidates.sort()  # Sort by distance
-        return [id for _, id in candidates[:M]]
-
-    def add_item(self, id: str, vector: np.ndarray) -> None:
-        """Add a new item to the index.
-
-        Args:
-            id: Unique identifier for the vector
-            vector: Vector to add
-        """
-        if id in self.nodes:
-            # Update the vector if the ID already exists
-            self.nodes[id] = vector
-            return
-
-        self.nodes[id] = vector
-
-        # Get random level for this node using exponential distribution
-        l = min(self._get_random_level(), self.ml)
-        self.node_levels[id] = l
-
-        # If this is the first node, make it the entry point and return
-        if self.ep is None:
-            self.ep = id
-            # Initialize empty neighbor sets for this node at all levels up to l
-            for level in range(l + 1):
-                self.graphs[level][id] = set()
-            return
-
-        # Find insertion point and add connections
-        ep = self.ep
-        ep_level = self.node_levels[self.ep]
-
-        # For levels above l, just search without adding connections
-        for level in range(min(ep_level, self.ml), l, -1):
-            res = self._search_layer(vector, ep, 1, level)
-            if res:
-                ep = res[0][1]  # ID of the closest element
-
-        # For levels where we add the node
-        for level in range(min(l, ep_level), -1, -1):
-            # Find ef_construction nearest elements at this level
-            W = self._search_layer(vector, ep, self.ef_construction, level)
-            # Select M neighbors
-            neighbors = self._select_neighbors(
-                vector, W, self.M_max0 if level == 0 else self.M
+    def _select_neighbors(self, q: np.ndarray, candidates: List[Tuple[float, str]], M: int) -> List[str]:
+        """Select close but directionally diverse neighbors (Algorithm 4)."""
+        by_id = {item_id: distance for distance, item_id in candidates}
+        ordered = sorted(by_id.items(), key=lambda pair: (pair[1], pair[0]))
+        selected: List[str] = []
+        rejected: List[str] = []
+        for candidate_id, query_distance in ordered:
+            diverse = all(
+                self._normalized_distance(self._normalized_nodes[candidate_id], self._normalized_nodes[chosen]) > query_distance
+                for chosen in selected
             )
+            (selected if diverse else rejected).append(candidate_id)
+            if len(selected) == M:
+                return selected
+        selected.extend(rejected[: M - len(selected)])
+        return selected
 
-            # Initialize an empty set for this node's neighbors at this level
-            if id not in self.graphs[level]:
-                self.graphs[level][id] = set()
+    def _prune(self, node_id: str, level: int) -> None:
+        graph = self.graphs[level]
+        limit = self.M_max0 if level == 0 else self.M
+        if len(graph[node_id]) <= limit:
+            return
+        candidates = [
+            (self._normalized_distance(self._normalized_nodes[node_id], self._normalized_nodes[neighbor]), neighbor)
+            for neighbor in graph[node_id]
+        ]
+        keep = set(self._select_neighbors(self._normalized_nodes[node_id], candidates, limit))
+        removed = graph[node_id] - keep
+        graph[node_id] = keep
+        for other in removed:
+            graph.get(other, set()).discard(node_id)
 
-            # Add bidirectional connections
-            for neighbor_id in neighbors:
-                self.graphs[level][id].add(neighbor_id)
-
-                # Create neighbor set for neighbor if it doesn't exist
-                if neighbor_id not in self.graphs[level]:
-                    self.graphs[level][neighbor_id] = set()
-
-                self.graphs[level][neighbor_id].add(id)
-
-                # Ensure neighbor doesn't have too many connections
-                if len(self.graphs[level][neighbor_id]) > (
-                    self.M_max0 if level == 0 else self.M
-                ):
-                    # Need to remove some connections
-                    # For simplicity, just keep the M closest ones
-                    neighbor_candidates = [
-                        (
-                            self._distance(self.nodes[neighbor_id], self.nodes[n_id]),
-                            n_id,
-                        )
-                        for n_id in self.graphs[level][neighbor_id]
-                    ]
-                    keep_neighbors = self._select_neighbors(
-                        self.nodes[neighbor_id],
-                        neighbor_candidates,
-                        self.M_max0 if level == 0 else self.M,
-                    )
-                    self.graphs[level][neighbor_id] = set(keep_neighbors)
-
-            # Update entry point for the next level
-            ep = id
-
-        # Update entry point if this node has higher level
-        if l > ep_level:
-            self.ep = id
+    def add_item(self, id: str, vector: Sequence[float] | np.ndarray) -> None:
+        item_id = str(id)
+        raw_value = as_float32_vector(vector, self.dim).copy()
+        value = normalize(raw_value)
+        if item_id in self.nodes:
+            self.remove_item(item_id)
+        level = self._get_random_level()
+        self.nodes[item_id], self._normalized_nodes[item_id] = raw_value, value
+        self.node_levels[item_id] = level
+        for current_level in range(level + 1):
+            self.graphs.setdefault(current_level, {})[item_id] = set()
+        if self.ep is None:
+            self.ep = item_id
+            return
+        entry = self.ep
+        entry_level = self.node_levels[entry]
+        for current_level in range(entry_level, level, -1):
+            result = self._search_layer(value, entry, 1, current_level)
+            if result:
+                entry = result[0][1]
+        for current_level in range(min(level, entry_level), -1, -1):
+            candidates = self._search_layer(value, entry, self.ef_construction, current_level)
+            limit = self.M_max0 if current_level == 0 else self.M
+            neighbors = self._select_neighbors(value, candidates, limit)
+            graph = self.graphs[current_level]
+            graph[item_id].update(neighbors)
+            for neighbor in neighbors:
+                graph[neighbor].add(item_id)
+                self._prune(neighbor, current_level)
+            if candidates:
+                entry = candidates[0][1]
+        if level > entry_level:
+            self.ep = item_id
 
     def remove_item(self, id: str) -> None:
-        """Remove an item from the index.
-
-        Args:
-            id: Unique identifier for the vector to remove
-
-        Raises:
-            KeyError: If the ID doesn't exist
-        """
         if id not in self.nodes:
             raise KeyError(f"Item with ID {id} not found in index")
-
-        l = self.node_levels[id]
-
-        # Remove connections at all levels
-        for level in range(l + 1):
-            # Remove outgoing connections
-            neighbors = self.graphs[level].get(id, set())
-            for neighbor_id in neighbors:
-                if neighbor_id in self.graphs[level]:
-                    self.graphs[level][neighbor_id].discard(id)
-
-            # Remove the node from the graph at this level
-            if id in self.graphs[level]:
-                del self.graphs[level][id]
-
-        # Remove from nodes and levels
+        for level in range(self.node_levels[id] + 1):
+            graph = self.graphs[level]
+            for neighbor in graph.get(id, set()):
+                graph[neighbor].discard(id)
+            graph.pop(id, None)
         del self.nodes[id]
+        del self._normalized_nodes[id]
         del self.node_levels[id]
+        self.ep = max(self.node_levels, key=lambda item_id: self.node_levels[item_id]) if self.nodes else None
 
-        # Update entry point if needed
-        if self.ep == id:
-            if not self.nodes:  # If this was the last node
-                self.ep = None
-            else:
-                # Find a new entry point with the highest level
-                max_level = -1
-                new_ep = None
-                for node_id, level in self.node_levels.items():
-                    if level > max_level:
-                        max_level = level
-                        new_ep = node_id
-                self.ep = new_ep
-
-    def search(
-        self, query: np.ndarray, k: int = 10, ef_search: int = None
-    ) -> List[Tuple[str, float]]:
-        """Search for k nearest neighbors.
-
-        Args:
-            query: Query vector
-            k: Number of nearest neighbors to return
-            ef_search: Size of dynamic candidate list for search (default: max(ef_construction, k))
-
-        Returns:
-            List of (id, similarity) tuples sorted by similarity (highest first)
-        """
-        if not self.nodes or self.ep is None:
+    def search(self, query: Sequence[float] | np.ndarray, k: int = 10,
+               ef_search: int | None = None) -> List[Tuple[str, float]]:
+        if k < 1:
+            raise ValueError("k must be at least 1")
+        q = normalize(as_float32_vector(query, self.dim))
+        if self.ep is None:
             return []
+        entry = self.ep
+        for level in range(self.node_levels[entry], 0, -1):
+            result = self._search_layer(q, entry, 1, level)
+            if result:
+                entry = result[0][1]
+        candidates = self._search_layer(q, entry, max(k, ef_search or k), 0)
+        return [(item_id, float(1.0 - distance)) for distance, item_id in candidates[:k]]
 
-        ef = max(k, self.ef_construction if ef_search is None else ef_search)
-
-        # Start from the top layer of the entry point
-        ep = self.ep
-        L = self.node_levels[ep]
-
-        # Traverse from top to bottom, finding entry point for next level each time
-        for level in range(L, 0, -1):
-            res = self._search_layer(query, ep, 1, level)
-            if res:
-                ep = res[0][1]  # ID of the closest element
-
-        # Search at layer 0 with full ef value
-        candidates = self._search_layer(query, ep, ef, 0)
-
-        # Process results - convert distances to similarities and cap at k results
-        results = []
-        for distance, id in candidates[:k]:
-            # Convert distance back to similarity (1 - distance)
-            similarity = 1.0 - distance
-            results.append((id, similarity))
-
-        return results
+    def validate(self) -> None:
+        """Raise ``IndexInvariantError`` with the first structural violation."""
+        if bool(self.nodes) != (self.ep is not None):
+            raise IndexInvariantError("entry point must exist iff graph is non-empty")
+        if self.ep is not None and self.ep not in self.nodes:
+            raise IndexInvariantError("entry point references a nonexistent node")
+        if set(self.nodes) != set(self.node_levels) or set(self.nodes) != set(self._normalized_nodes):
+            raise IndexInvariantError("nodes, normalized nodes, and node_levels contain different IDs")
+        for item_id, max_level in self.node_levels.items():
+            if max_level < 0:
+                raise IndexInvariantError(f"node {item_id!r} has a negative level")
+            for level in range(max_level + 1):
+                if item_id not in self.graphs.get(level, {}):
+                    raise IndexInvariantError(f"node {item_id!r} is missing from level {level}")
+        for level, graph in self.graphs.items():
+            limit = self.M_max0 if level == 0 else self.M
+            for item_id, neighbors in graph.items():
+                if item_id not in self.nodes or level > self.node_levels[item_id]:
+                    raise IndexInvariantError(f"invalid node {item_id!r} at level {level}")
+                if len(neighbors) > limit:
+                    raise IndexInvariantError(f"degree {len(neighbors)} exceeds {limit} at level {level}")
+                for neighbor in neighbors:
+                    if neighbor not in self.nodes:
+                        raise IndexInvariantError(f"edge references missing node {neighbor!r}")
+                    if item_id not in graph.get(neighbor, set()):
+                        raise IndexInvariantError(f"edge {item_id!r}-{neighbor!r} is not bidirectional")
+        if any(not np.all(np.isfinite(vector)) for vector in self.nodes.values()):
+            raise IndexInvariantError("stored vectors must be finite")
