@@ -15,7 +15,7 @@ The project is deliberately single-machine and small enough that the important a
 - generation-based local checkpoints without pickle
 - recovery to the previous complete checkpoint and explicit corruption errors
 - property tests for randomized graph mutations
-- a reproducible `ef_search` recall/latency benchmark
+- reproducible frontier, insertion-order, and deletion experiments
 
 ## Architecture
 
@@ -50,17 +50,21 @@ This is a committed smoke measurement, not a large-scale performance claim: 1,00
 
 | ef_search | recall@10 | p50 ms | p99 ms | QPS |
 |---:|---:|---:|---:|---:|
-| 10 | 0.758 | 0.538 | 1.092 | 1,731 |
-| 20 | 0.910 | 0.826 | 1.552 | 1,136 |
-| 40 | 0.988 | 1.241 | 2.298 | 753 |
-| 80 | 0.996 | 1.652 | 2.808 | 567 |
-| 160 | 1.000 | 1.907 | 2.694 | 505 |
+| 10 | 0.768 | 0.522 | 0.666 | 1,902 |
+| 20 | 0.908 | 0.746 | 0.857 | 1,327 |
+| 40 | 0.990 | 1.106 | 1.189 | 903 |
+| 80 | 0.996 | 1.475 | 1.652 | 674 |
+| 160 | 1.000 | 1.777 | 1.861 | 562 |
 
-Build time was 7.77 s (129 vectors/s). The result demonstrates the expected frontier: greater search effort recovers more exact neighbors while reducing throughput. Full raw output is in [`benchmarks/results/smoke-1000x64-seed42.json`](benchmarks/results/smoke-1000x64-seed42.json). Results are hardware- and dataset-specific.
+Build time was 7.37 s (136 vectors/s). The result demonstrates the expected frontier: greater search effort recovers more exact neighbors while reducing throughput. Full raw output is in [`benchmarks/results/frontier-1000x64.json`](benchmarks/results/frontier-1000x64.json). Results are hardware- and dataset-specific.
+
+At `ef_search=20`, five deterministic insertion orders produced recall@10 from 0.904 to 0.922 (mean 0.9116, population standard deviation 0.0061). This small experiment demonstrates topology sensitivity; it does not establish statistical significance. After cumulative physical deletion of 20%, recall was 0.916 versus a baseline of 0.908; rebuilding the remaining vectors raised it to 0.954. This dataset did not show monotonic deletion degradation, so none is claimed. The rebuild result still shows that an unrepaired graph and a fresh graph are measurably different. These files record the base Git revision and `working_tree_dirty=true`, because Stage Two measurements were produced before its changes were committed.
 
 ```bash
-python benchmarks/ann_benchmark.py --vectors 10000 --dim 128 --queries 100 \
-  --ef-search 10 20 40 80 160 --seed 42
+python -m benchmarks.ann_benchmark --experiment frontier --vectors 10000 \
+  --dim 128 --queries 100 --ef-search 10 20 40 80 160
+python -m benchmarks.ann_benchmark --experiment insertion-order --ef-search 20
+python -m benchmarks.ann_benchmark --experiment deletion --ef-search 20
 ```
 
 Use 100,000 vectors and dimensions 128/384/768 for full experiments; those runs are deliberately excluded from CI.
@@ -74,11 +78,13 @@ Each mutation writes an immutable `gen-*/` directory containing `manifest.json`,
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -e '.[dev,cli]'
-ruff check vecstream tests benchmarks/ann_benchmark.py
+python -m pip install numpy hypothesis mypy pytest ruff
+ruff check --select E,F,I,B vecstream tests benchmarks/ann_benchmark.py
 mypy vecstream
 pytest -q
 ```
+
+VecStream is run directly from the repository and is not published as a Python package.
 
 See [HNSW design](docs/design.md), [limitations](docs/limitations.md), [performance notes](docs/performance.md), and the [repository audit](docs/audit.md).
 

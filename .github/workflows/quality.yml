@@ -7,8 +7,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -e '.[dev,cli]'
-      - run: ruff check --select E9,F63,F7,F82 vecstream tests benchmarks/ann_benchmark.py
-      - run: mypy --follow-imports=skip vecstream/hnsw_index.py vecstream/vector_store.py vecstream/binary_store.py
+      - run: pip install numpy hypothesis mypy pytest ruff
+      - run: ruff check --select E,F,I,B vecstream tests benchmarks/ann_benchmark.py
+      - run: ruff format --check vecstream tests benchmarks/ann_benchmark.py
+      - run: mypy vecstream
       - run: pytest -q
-      - run: python benchmarks/ann_benchmark.py --vectors 500 --queries 10 --dim 32 --ef-search 10 20
+      - run: python -m benchmarks.ann_benchmark --experiment frontier --vectors 300 --queries 10 --dim 32 --ef-search 10 20
+      - run: python -m benchmarks.ann_benchmark --experiment insertion-order --vectors 300 --queries 10 --dim 32 --ef-search 20 --order-seeds 1 2
+      - run: python -m benchmarks.ann_benchmark --experiment deletion --vectors 300 --queries 10 --dim 32 --ef-search 20

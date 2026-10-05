@@ -2,15 +2,15 @@
 Collections module for managing multiple vector collections/namespaces.
 """
 
-import os
 import json
-from typing import Dict, List, Tuple, Optional, Any, Set
+import os
 import shutil
 import tempfile
+from typing import Any, Dict, List, Optional, Tuple
 
 from .binary_store import BinaryVectorStore
-from .hnsw_index import HNSWIndex
 from .errors import CorruptStoreError
+from .hnsw_index import HNSWIndex
 
 
 class Collection:
@@ -41,7 +41,7 @@ class Collection:
         # HNSW index settings
         self.use_hnsw = use_hnsw
         self.hnsw_params = hnsw_params or {}
-        self.hnsw_index = None
+        self.hnsw_index: Optional[HNSWIndex] = None
 
         # Initialize HNSW index if required
         if use_hnsw and self.store.dimension is not None:
@@ -63,6 +63,7 @@ class Collection:
 
         # Add all existing vectors to the index
         for id, vector in self.store.vectors.items():
+            assert self.hnsw_index is not None
             self.hnsw_index.add_item(id, vector)
 
     def add_vector(
@@ -132,7 +133,7 @@ class Collection:
                 # When only using threshold filtering (no metadata), still use a larger k
                 # to ensure we don't miss potential matches that meet the threshold
                 search_k = max(k * 10, 100)
-                
+
             results = self.hnsw_index.search(query, k=search_k, ef_search=ef_search)
 
             # Apply metadata filtering if needed
@@ -170,9 +171,7 @@ class Collection:
                 # No filtering needed
                 return self.store.search_similar(query, k=k, threshold=threshold)
 
-    def _matches_filter(
-        self, metadata: Dict[str, Any], filter_query: Dict[str, Any]
-    ) -> bool:
+    def _matches_filter(self, metadata: Dict[str, Any], filter_query: Dict[str, Any]) -> bool:
         """Check if metadata matches the filter query.
 
         Args:
@@ -208,9 +207,7 @@ class Collection:
 
         return True
 
-    def get_vector_with_metadata(
-        self, id: str
-    ) -> Tuple[List[float], Optional[Dict[str, Any]]]:
+    def get_vector_with_metadata(self, id: str) -> Tuple[List[float], Optional[Dict[str, Any]]]:
         """Get a vector and its metadata.
 
         Args:
@@ -319,14 +316,10 @@ class CollectionManager:
 
         # Use defaults if not specified
         use_hnsw_flag = self.use_hnsw if use_hnsw is None else use_hnsw
-        hnsw_params_dict = (
-            dict(self.default_hnsw_params) if hnsw_params is None else hnsw_params
-        )
+        hnsw_params_dict = dict(self.default_hnsw_params) if hnsw_params is None else hnsw_params
 
         # Create and store collection
-        collection = Collection(
-            name, self.base_storage_dir, use_hnsw_flag, hnsw_params_dict
-        )
+        collection = Collection(name, self.base_storage_dir, use_hnsw_flag, hnsw_params_dict)
         self.collections[name] = collection
 
         # Save metadata

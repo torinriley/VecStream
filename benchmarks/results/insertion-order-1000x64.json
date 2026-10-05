@@ -1,0 +1,86 @@
+{
+  "environment": {
+    "vecstream_revision": "ea285da89d72a3e9d05e96ac7d760ccb03cdcf4a",
+    "working_tree_dirty": true,
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "processor": "arm",
+    "python": "3.14.3",
+    "numpy": "2.5.3"
+  },
+  "experiment": "insertion-order",
+  "configuration": {
+    "experiment": "insertion-order",
+    "vectors": 1000,
+    "queries": 50,
+    "dim": 64,
+    "k": 10,
+    "M": 16,
+    "ef_construction": 100,
+    "ef_search": [
+      20
+    ],
+    "warmups": 5,
+    "dataset_seed": 42,
+    "graph_seed": 43,
+    "order_seeds": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "deletion_seed": 44
+  },
+  "results": {
+    "ef_search": 20,
+    "runs": [
+      {
+        "insertion_order_seed": 1,
+        "build_seconds": 7.245805540998845,
+        "recall@10": 0.914,
+        "p50_ms": 0.738146,
+        "p99_ms": 0.85547358,
+        "qps": 1350.7580764999675
+      },
+      {
+        "insertion_order_seed": 2,
+        "build_seconds": 7.160134833000484,
+        "recall@10": 0.91,
+        "p50_ms": 0.763146,
+        "p99_ms": 0.81895866,
+        "qps": 1316.2195657459965
+      },
+      {
+        "insertion_order_seed": 3,
+        "build_seconds": 7.097335499998735,
+        "recall@10": 0.922,
+        "p50_ms": 0.7316245,
+        "p99_ms": 1.101236249999999,
+        "qps": 1337.7733853623724
+      },
+      {
+        "insertion_order_seed": 4,
+        "build_seconds": 7.23738725000112,
+        "recall@10": 0.904,
+        "p50_ms": 0.7155210000000001,
+        "p99_ms": 0.78817041,
+        "qps": 1393.906409889777
+      },
+      {
+        "insertion_order_seed": 5,
+        "build_seconds": 7.005199167000683,
+        "recall@10": 0.908,
+        "p50_ms": 0.708187,
+        "p99_ms": 0.80132342,
+        "qps": 1398.718499705444
+      }
+    ],
+    "summary": {
+      "mean_recall": 0.9116000000000001,
+      "recall_stddev": 0.006118823416311347,
+      "min_recall": 0.904,
+      "max_recall": 0.922
+    }
+  }
+}

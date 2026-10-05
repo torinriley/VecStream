@@ -1,17 +1,7 @@
-"""
-VecStream - a compact vector-search engine.
-"""
+"""VecStream: compact exact and HNSW vector search."""
 
-__version__ = "0.4.0"
-
-from .vector_store import VectorStore
 from .binary_store import BinaryVectorStore
-from .persistent_store import PersistentVectorStore
-from .index_manager import IndexManager
-from .query_engine import QueryEngine
-from .hnsw_index import HNSWIndex
 from .collections import Collection, CollectionManager
-from .client import ClientAPI
 from .errors import (
     CorruptStoreError,
     DimensionMismatchError,
@@ -20,21 +10,19 @@ from .errors import (
     InvalidVectorError,
     UnsupportedFormatVersionError,
 )
+from .hnsw_index import HNSWIndex
+from .vector_store import VectorStore
 
 __all__ = [
-    "VectorStore",
     "BinaryVectorStore",
-    "PersistentVectorStore",
-    "IndexManager",
-    "QueryEngine",
-    "HNSWIndex",
     "Collection",
     "CollectionManager",
-    "ClientAPI",
     "CorruptStoreError",
     "DimensionMismatchError",
+    "HNSWIndex",
     "IndexInvariantError",
     "InvalidManifestError",
     "InvalidVectorError",
     "UnsupportedFormatVersionError",
+    "VectorStore",
 ]

@@ -9,7 +9,9 @@ import numpy as np
 from .errors import DimensionMismatchError, InvalidVectorError
 
 
-def as_float32_vector(vector: Sequence[float] | np.ndarray, dimension: int | None = None) -> np.ndarray:
+def as_float32_vector(
+    vector: Sequence[float] | np.ndarray, dimension: int | None = None
+) -> np.ndarray:
     """Convert and validate a finite 1-D vector. Zero-vector cosine is 0.0."""
     try:
         value: np.ndarray = np.asarray(vector, dtype=np.float32)
@@ -28,10 +30,12 @@ def as_float32_vector(vector: Sequence[float] | np.ndarray, dimension: int | Non
 
 def normalize(vector: np.ndarray) -> np.ndarray:
     """Return a normalized float32 copy; a zero vector remains all-zero."""
-    norm = float(np.linalg.norm(vector))
+    # Accumulate in float64: squaring a finite float32 near its maximum can
+    # overflow in float32, while subnormal values can underflow to zero.
+    norm = float(np.linalg.norm(vector.astype(np.float64)))
     if norm == 0.0:
         return np.zeros_like(vector, dtype=np.float32)
-    return np.asarray(vector / norm, dtype=np.float32)
+    return np.asarray(vector.astype(np.float64) / norm, dtype=np.float32)
 
 
 class VectorStore:
@@ -71,8 +75,13 @@ class VectorStore:
         query_value = normalize(as_float32_vector(query, self.dimension))
         ids = list(self.vectors)
         matrix = np.stack([self.vectors[item_id] for item_id in ids])
-        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-        normalized = np.divide(matrix, norms, out=np.zeros_like(matrix), where=norms != 0)
+        norms = np.linalg.norm(matrix.astype(np.float64), axis=1, keepdims=True)
+        normalized = np.divide(
+            matrix,
+            norms,
+            out=np.zeros_like(matrix),
+            where=norms != 0,
+        )
         scores = normalized @ query_value
         eligible = np.flatnonzero(scores >= threshold)
         order = eligible[np.argsort(-scores[eligible], kind="stable")][:k]
