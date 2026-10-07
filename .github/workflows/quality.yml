@@ -11,7 +11,7 @@ jobs:
       - run: ruff check --select E,F,I,B vecstream tests benchmarks/ann_benchmark.py
       - run: ruff format --check vecstream tests benchmarks/ann_benchmark.py
       - run: mypy vecstream
-      - run: pytest -q
+      - run: python -m pytest -q
       - run: python -m benchmarks.ann_benchmark --experiment frontier --vectors 300 --queries 10 --dim 32 --ef-search 10 20
       - run: python -m benchmarks.ann_benchmark --experiment insertion-order --vectors 300 --queries 10 --dim 32 --ef-search 20 --order-seeds 1 2
       - run: python -m benchmarks.ann_benchmark --experiment deletion --vectors 300 --queries 10 --dim 32 --ef-search 20
