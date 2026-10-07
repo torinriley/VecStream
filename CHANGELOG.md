@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- update (#34)
+
+### Added
 - Exact-search recall oracle and three reproducible ANN experiments.
 - Comprehensive HNSW invariant validation and property-based mutation tests.
 - Versioned, crash-safe vector checkpoints with explicit corruption errors.
