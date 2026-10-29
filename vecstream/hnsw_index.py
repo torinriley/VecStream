@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -81,35 +81,35 @@ class HNSWIndex:
         """Select close but directionally diverse neighbors (Algorithm 4)."""
         by_id = {item_id: distance for distance, item_id in candidates}
         ordered = sorted(by_id.items(), key=lambda pair: (pair[1], pair[0]))
-        selected: List[str] = []
-        rejected: List[str] = []
-        for candidate_id, query_distance in ordered:
-            diverse = all(
-                self._normalized_distance(
-                    self._normalized_nodes[candidate_id], self._normalized_nodes[chosen]
-                )
-                > query_distance
-                for chosen in selected
-            )
-            (selected if diverse else rejected).append(candidate_id)
-            if len(selected) == M:
-                return selected
+        if not ordered:
+            return []
+        matrix = np.stack([self._normalized_nodes[item_id] for item_id, _ in ordered])
+        between = np.clip(1.0 - matrix @ matrix.T, 0.0, 2.0)
+        selected: List[int] = []
+        rejected: List[int] = []
+        # Distance from each candidate to its nearest already-selected neighbor.
+        nearest_selected = np.full(len(ordered), np.inf)
+        for position, (_, query_distance) in enumerate(ordered):
+            if nearest_selected[position] > query_distance:
+                selected.append(position)
+                np.minimum(nearest_selected, between[position], out=nearest_selected)
+                if len(selected) == M:
+                    return [ordered[p][0] for p in selected]
+            else:
+                rejected.append(position)
         selected.extend(rejected[: M - len(selected)])
-        return selected
+        return [ordered[p][0] for p in selected]
 
     def _prune(self, node_id: str, level: int) -> None:
         graph = self.graphs[level]
         limit = self.M_max0 if level == 0 else self.M
         if len(graph[node_id]) <= limit:
             return
+        neighbors = sorted(graph[node_id])
+        matrix = np.stack([self._normalized_nodes[neighbor] for neighbor in neighbors])
+        distances = np.clip(1.0 - matrix @ self._normalized_nodes[node_id], 0.0, 2.0)
         candidates = [
-            (
-                self._normalized_distance(
-                    self._normalized_nodes[node_id], self._normalized_nodes[neighbor]
-                ),
-                neighbor,
-            )
-            for neighbor in graph[node_id]
+            (float(d), neighbor) for d, neighbor in zip(distances, neighbors, strict=True)
         ]
         keep = set(self._select_neighbors(self._normalized_nodes[node_id], candidates, limit))
         removed = graph[node_id] - keep
@@ -152,25 +152,97 @@ class HNSWIndex:
             self.ep = item_id
 
     def remove_item(self, id: str) -> None:
+        """Remove a node, then repair the neighborhoods it leaves behind.
+
+        Each former neighbor regains edges to the removed node's other
+        neighbors (chosen by the usual diversity heuristic, never exceeding
+        the degree limit), so deletions do not erode graph connectivity.
+        """
         if id not in self.nodes:
             raise KeyError(f"Item with ID {id} not found in index")
-        for level in range(self.node_levels[id] + 1):
+        top = self.node_levels[id]
+        orphans_by_level: Dict[int, Set[str]] = {}
+        for level in range(top + 1):
             graph = self.graphs[level]
-            for neighbor in graph.get(id, set()):
+            neighbors = graph.pop(id, set())
+            for neighbor in neighbors:
                 graph[neighbor].discard(id)
-            graph.pop(id, None)
+            orphans_by_level[level] = neighbors
         del self.nodes[id]
         del self._normalized_nodes[id]
         del self.node_levels[id]
-        self.ep = (
-            max(self.node_levels, key=lambda item_id: self.node_levels[item_id])
-            if self.nodes
-            else None
-        )
+        if self.ep == id:
+            self.ep = self._successor_entry(orphans_by_level[top])
+        for level, orphans in orphans_by_level.items():
+            self._repair(level, orphans)
+
+    def _successor_entry(self, top_neighbors: Set[str]) -> Optional[str]:
+        """Pick a new entry point at the maximum level, scanning only if needed."""
+        if not self.nodes:
+            return None
+        if top_neighbors:  # neighbors on the removed entry's top layer share that level
+            return min(top_neighbors)
+        return max(sorted(self.node_levels), key=lambda item_id: self.node_levels[item_id])
+
+    def _repair(self, level: int, orphans: Set[str]) -> None:
+        """Reconnect nodes that lost an edge to a removed node.
+
+        Each orphan gains at most as many edges as it has free degree, picked
+        from the other orphans by the diversity heuristic against its existing
+        neighbors. Existing edges are never dropped, so no node can be
+        disconnected by repair.
+        """
+        graph = self.graphs[level]
+        limit = self.M_max0 if level == 0 else self.M
+        for node in sorted(orphans):
+            existing = graph[node]
+            room = limit - len(existing)
+            pool = sorted(orphans - existing - {node})
+            if room <= 0 or not pool:
+                continue
+            candidates = np.stack([self._normalized_nodes[other] for other in pool])
+            to_node = np.clip(1.0 - candidates @ self._normalized_nodes[node], 0.0, 2.0)
+            nearest = np.full(len(pool), np.inf)
+            if existing:
+                kept_matrix = np.stack([self._normalized_nodes[member] for member in existing])
+                nearest = np.clip(1.0 - candidates @ kept_matrix.T, 0.0, 2.0).min(axis=1)
+            gram = np.clip(1.0 - candidates @ candidates.T, 0.0, 2.0)
+            chosen: List[int] = []
+            skipped: List[int] = []
+            for position in np.lexsort((np.arange(len(pool)), to_node)).tolist():
+                if nearest[position] > to_node[position]:
+                    chosen.append(position)
+                    np.minimum(nearest, gram[position], out=nearest)
+                else:
+                    skipped.append(position)
+                if len(chosen) == room:
+                    break
+            chosen.extend(skipped[: room - len(chosen)])
+            added = [pool[position] for position in chosen]
+            for other in added:
+                graph[node].add(other)
+                graph[other].add(node)
+            for other in added:
+                self._prune(other, level)
 
     def search(
-        self, query: Sequence[float] | np.ndarray, k: int = 10, ef_search: int | None = None
+        self,
+        query: Sequence[float] | np.ndarray,
+        k: int = 10,
+        ef_search: int | None = None,
+        predicate: Optional[Callable[[str], bool]] = None,
+        min_score: Optional[float] = None,
+        max_visits: Optional[int] = None,
     ) -> List[Tuple[str, float]]:
+        """Return the approximate top-``k`` as ``(id, cosine_similarity)``.
+
+        ``predicate`` and ``min_score`` are applied *during* traversal: only
+        qualifying nodes count toward the result set, while every node is
+        still used to navigate. If the filter is so selective that the search
+        visits ``max_visits`` nodes without finding ``k`` matches, the result
+        is the exact top-``k`` among matching nodes (a full scan), so a
+        filtered search never silently under-fills while matches exist.
+        """
         if k < 1:
             raise ValueError("k must be at least 1")
         q = normalize(as_float32_vector(query, self.dim))
@@ -181,8 +253,74 @@ class HNSWIndex:
             result = self._search_layer(q, entry, 1, level)
             if result:
                 entry = result[0][1]
-        candidates = self._search_layer(q, entry, max(k, ef_search or k), 0)
-        return [(item_id, float(1.0 - distance)) for distance, item_id in candidates[:k]]
+        ef = max(k, ef_search or k)
+        if predicate is None and min_score is None:
+            candidates = self._search_layer(q, entry, ef, 0)
+            return [(item_id, float(1.0 - distance)) for distance, item_id in candidates[:k]]
+        return self._search_filtered(q, entry, k, ef, predicate, min_score, max_visits)[0]
+
+    def _search_filtered(
+        self,
+        q: np.ndarray,
+        entry: str,
+        k: int,
+        ef: int,
+        predicate: Optional[Callable[[str], bool]],
+        min_score: Optional[float],
+        max_visits: Optional[int],
+    ) -> Tuple[List[Tuple[str, float]], int, bool]:
+        """Return ``(results, nodes_visited, used_exact_fallback)``."""
+        limit = max_visits if max_visits is not None else max(2000, 50 * ef)
+        max_distance = float("inf") if min_score is None else 1.0 - min_score
+
+        def qualifies(item_id: str, distance: float) -> bool:
+            return distance <= max_distance and (predicate is None or predicate(item_id))
+
+        graph = self.graphs[0]
+        initial = self._normalized_distance(q, self._normalized_nodes[entry])
+        candidates: List[Tuple[float, str]] = [(initial, entry)]
+        results: List[Tuple[float, str]] = []
+        if qualifies(entry, initial):
+            results.append((-initial, entry))
+        visited = {entry}
+        exhausted = False
+        while candidates:
+            candidate_distance, candidate_id = heapq.heappop(candidates)
+            if len(results) >= ef and candidate_distance > -results[0][0]:
+                break
+            for neighbor in graph.get(candidate_id, ()):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                distance = self._normalized_distance(q, self._normalized_nodes[neighbor])
+                if len(results) < ef or distance < -results[0][0]:
+                    heapq.heappush(candidates, (distance, neighbor))
+                    if qualifies(neighbor, distance):
+                        heapq.heappush(results, (-distance, neighbor))
+                        if len(results) > ef:
+                            heapq.heappop(results)
+            if len(visited) >= limit and len(results) < k:
+                exhausted = True
+                break
+        if exhausted:
+            return self._exact_filtered(q, k, qualifies), len(visited), True
+        ordered = sorted((-negative, item_id) for negative, item_id in results)[:k]
+        return (
+            [(item_id, float(1.0 - distance)) for distance, item_id in ordered],
+            len(visited),
+            False,
+        )
+
+    def _exact_filtered(
+        self, q: np.ndarray, k: int, qualifies: Callable[[str, float], bool]
+    ) -> List[Tuple[str, float]]:
+        scored = []
+        for item_id, vector in self._normalized_nodes.items():
+            distance = self._normalized_distance(q, vector)
+            if qualifies(item_id, distance):
+                scored.append((distance, item_id))
+        scored.sort()
+        return [(item_id, float(1.0 - distance)) for distance, item_id in scored[:k]]
 
     def validate(self) -> None:
         """Raise ``IndexInvariantError`` with the first structural violation."""

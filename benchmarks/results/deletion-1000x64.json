@@ -1,11 +1,11 @@
 {
   "environment": {
-    "vecstream_revision": "ea285da89d72a3e9d05e96ac7d760ccb03cdcf4a",
+    "vecstream_revision": "ec754e19922bff83be6b42010083dabc8791e6bc",
     "working_tree_dirty": true,
-    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
-    "architecture": "arm64",
-    "processor": "arm",
-    "python": "3.14.3",
+    "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
+    "architecture": "x86_64",
+    "processor": "x86_64",
+    "python": "3.13.17",
     "numpy": "2.5.3"
   },
   "experiment": "deletion",
@@ -33,50 +33,50 @@
     "deletion_seed": 44
   },
   "results": {
-    "initial_build_seconds": 7.59150420900005,
-    "rebuild_seconds": 5.429771624998466,
+    "initial_build_seconds": 8.183459675999984,
+    "rebuild_seconds": 6.92592297200008,
     "ef_search": 20,
     "stages": [
       {
         "deleted_fraction": 0.0,
         "remaining_vectors": 1000,
         "recall@10": 0.908,
-        "p50_ms": 0.7918335,
-        "p99_ms": 0.8779598299999999,
-        "qps": 1266.2045695296988
+        "p50_ms": 4.9603605,
+        "p99_ms": 5.62383546,
+        "qps": 200.76016551808362
       },
       {
         "deleted_fraction": 0.05,
         "remaining_vectors": 950,
-        "recall@10": 0.916,
-        "p50_ms": 0.718459,
-        "p99_ms": 0.81786067,
-        "qps": 1381.205892743672
+        "recall@10": 0.928,
+        "p50_ms": 3.9931845,
+        "p99_ms": 5.78394959,
+        "qps": 248.50677621070676
       },
       {
         "deleted_fraction": 0.1,
         "remaining_vectors": 900,
-        "recall@10": 0.916,
-        "p50_ms": 0.7032499999999999,
-        "p99_ms": 0.770887,
-        "qps": 1410.7041351942103
+        "recall@10": 0.936,
+        "p50_ms": 4.8884825,
+        "p99_ms": 5.526733419999999,
+        "qps": 204.2850071327336
       },
       {
         "deleted_fraction": 0.2,
         "remaining_vectors": 800,
-        "recall@10": 0.916,
-        "p50_ms": 0.6229374999999999,
-        "p99_ms": 0.71083683,
-        "qps": 1591.5921660942295
+        "recall@10": 0.952,
+        "p50_ms": 4.8441745,
+        "p99_ms": 5.359460299999999,
+        "qps": 211.8134665384732
       },
       {
         "deleted_fraction": 0.2,
         "remaining_vectors": 800,
         "state": "rebuilt",
         "recall@10": 0.954,
-        "p50_ms": 0.7115,
-        "p99_ms": 0.77522308,
-        "qps": 1408.3086832370143
+        "p50_ms": 4.968108,
+        "p99_ms": 5.755062749999999,
+        "qps": 200.9088465272229
       }
     ]
   }

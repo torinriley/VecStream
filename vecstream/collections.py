@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -482,32 +482,14 @@ class Collection:
     ) -> List[Tuple[str, float]]:
         # If using HNSW index
         if self.use_hnsw and self.hnsw_index is not None:
-            # When filtering, get more candidates to ensure we have enough after filtering
-            # Use a much larger k value when filtering with threshold to ensure we find all matches
-            search_k = k
-            if filter_metadata is not None:
-                search_k = max(k * 100, 1000)
-            elif threshold > 0.0:
-                # When only using threshold filtering (no metadata), still use a larger k
-                # to ensure we don't miss potential matches that meet the threshold
-                search_k = max(k * 10, 100)
-
-            results = self.hnsw_index.search(query, k=search_k, ef_search=ef_search)
-
-            # Apply metadata filtering if needed
-            if filter_metadata:
-                filtered_results = []
-                for id, similarity in results:
-                    if similarity >= threshold:
-                        _, metadata = self.store.get_vector_with_metadata(id)
-                        if metadata and self._matches_filter(metadata, filter_metadata):
-                            filtered_results.append((id, similarity))
-                            if len(filtered_results) >= k:
-                                break
-                return filtered_results[:k]
-            else:
-                # Apply threshold and limit to k results
-                return [(id, sim) for id, sim in results if sim >= threshold][:k]
+            if filter_metadata or threshold > 0.0:
+                # Constraints are enforced during graph traversal, not after it.
+                predicate = self._metadata_predicate(filter_metadata)
+                return self.hnsw_index.search(
+                    query, k=k, ef_search=ef_search, predicate=predicate, min_score=threshold
+                )
+            results = self.hnsw_index.search(query, k=k, ef_search=ef_search)
+            return [(id, sim) for id, sim in results if sim >= threshold][:k]
         else:
             # Use regular search from store
             if filter_metadata:
@@ -528,6 +510,20 @@ class Collection:
             else:
                 # No filtering needed
                 return self.store.search_similar(query, k=k, threshold=threshold)
+
+    def _metadata_predicate(
+        self, filter_metadata: Optional[Dict[str, Any]]
+    ) -> Optional[Callable[[str], bool]]:
+        """Predicate over IDs; vectors without metadata never match a non-empty filter."""
+        if not filter_metadata:
+            return None
+        metadata = self.store.metadata
+
+        def predicate(item_id: str) -> bool:
+            record = metadata.get(item_id)
+            return record is not None and self._matches_filter(record, filter_metadata)
+
+        return predicate
 
     def _matches_filter(self, metadata: Dict[str, Any], filter_query: Dict[str, Any]) -> bool:
         """Check if metadata matches the filter query.

@@ -311,3 +311,25 @@ def test_graceful_shutdown_drains_inflight_requests_then_refuses_new_ones(env, m
         assert again.service.manager("acme").get_collection("d").get_vector_count() == 1
     finally:
         again.shutdown()
+
+
+def test_filtered_search_over_http_fills_k_for_selective_filters(env):
+    server, keys, *_ = env
+    admin = Client(server, keys["a_admin"])
+    admin.call("POST", "/v1/collections", {"name": "f"})
+    operations = [
+        {"op": "put", "id": f"v{i}", "vector": [1, i % 17 + 1, i % 5], "metadata": {"grp": i % 40}}
+        for i in range(400)
+    ]
+    assert admin.call("POST", "/v1/collections/f/batch", {"operations": operations})[0] == 200
+    status, body, _ = admin.call(
+        "POST",
+        "/v1/collections/f/search",
+        {"vector": [1, 1, 1], "k": 5, "filter": {"grp": 3}, "include_metadata": True},
+    )
+    assert status == 200 and len(body["results"]) == 5
+    assert all(r["metadata"]["grp"] == 3 for r in body["results"])
+    status, body, _ = admin.call(
+        "POST", "/v1/collections/f/search", {"vector": [1, 1, 1], "k": 3, "threshold": 0.999}
+    )
+    assert status == 200 and all(r["score"] >= 0.999 - 1e-6 for r in body["results"])
