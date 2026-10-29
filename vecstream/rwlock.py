@@ -1,4 +1,4 @@
-"""A writer-preferring readers-writer lock."""
+"""A phase-fair readers-writer lock."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ class ReadWriteLock:
     """Many concurrent readers or one exclusive writer; not reentrant.
 
     Waiting writers block new readers, so a steady stream of searches cannot
-    starve mutations.
+    starve mutations. When a writer releases, the readers already waiting get
+    the next turn, so a steady stream of mutations cannot starve searches.
     """
 
     def __init__(self) -> None:
@@ -19,12 +20,21 @@ class ReadWriteLock:
         self._readers = 0
         self._writer = False
         self._waiting_writers = 0
+        self._waiting_readers = 0
+        self._readers_turn = False
 
     def acquire_read(self) -> None:
         with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
+            self._waiting_readers += 1
+            try:
+                while self._writer or (self._waiting_writers and not self._readers_turn):
+                    self._condition.wait()
+            finally:
+                self._waiting_readers -= 1
             self._readers += 1
+            if not self._waiting_readers:
+                self._readers_turn = False
+                self._condition.notify_all()
 
     def release_read(self) -> None:
         with self._condition:
@@ -36,7 +46,9 @@ class ReadWriteLock:
         with self._condition:
             self._waiting_writers += 1
             try:
-                while self._writer or self._readers:
+                while (
+                    self._writer or self._readers or (self._readers_turn and self._waiting_readers)
+                ):
                     self._condition.wait()
             finally:
                 self._waiting_writers -= 1
@@ -45,6 +57,7 @@ class ReadWriteLock:
     def release_write(self) -> None:
         with self._condition:
             self._writer = False
+            self._readers_turn = self._waiting_readers > 0
             self._condition.notify_all()
 
     @contextmanager

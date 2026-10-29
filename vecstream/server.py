@@ -67,6 +67,7 @@ ROUTES = [
     _Route("POST", "/v1/collections/{collection}/verify", "manage", "verify"),
     _Route("POST", "/v1/collections/{collection}/batch", "write", "batch"),
     _Route("POST", "/v1/collections/{collection}/search", "read", "search"),
+    _Route("POST", "/v1/collections/{collection}/search/batch", "read", "search_batch"),
     _Route("PUT", "/v1/collections/{collection}/vectors/{id}", "write", "put_vector"),
     _Route("GET", "/v1/collections/{collection}/vectors/{id}", "read", "get_vector"),
     _Route("DELETE", "/v1/collections/{collection}/vectors/{id}", "write", "delete_vector"),
@@ -89,6 +90,7 @@ class VecStreamServer:
         max_body_bytes: int = 64 << 20,
         max_batch_operations: int = 10_000,
         max_k: int = 1_000,
+        max_batch_queries: int = 1_000,
         drain_timeout: float = 30.0,
         request_timeout: float = 30.0,
         **collection_options: Any,
@@ -102,6 +104,7 @@ class VecStreamServer:
         self.max_body_bytes = max_body_bytes
         self.max_batch_operations = max_batch_operations
         self.max_k = max_k
+        self.max_batch_queries = max_batch_queries
         self.drain_timeout = drain_timeout
         self.request_timeout = request_timeout
         self.started_at = time.time()
@@ -498,30 +501,43 @@ class VecStreamServer:
 
     def _h_search(self, principal: Principal, params: Dict[str, str], body: Any) -> Any:
         body = _object(body)
-        k = body.get("k", 10)
-        if not isinstance(k, int) or isinstance(k, bool) or not 1 <= k <= self.max_k:
-            raise _bad(f"k must be an integer between 1 and {self.max_k}")
-        threshold = body.get("threshold", 0.0)
-        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
-            raise _bad("threshold must be a number")
-        ef_search = body.get("ef_search")
-        if ef_search is not None and (
-            not isinstance(ef_search, int) or not 1 <= ef_search <= 100_000
-        ):
-            raise _bad("ef_search must be an integer between 1 and 100000")
-        flt = body.get("filter")
-        if flt is not None and not isinstance(flt, dict):
-            raise _bad("filter must be an object")
+        options = _search_options(body, self.max_k)
         collection = self._manager(principal).get_collection(params["collection"])
-        rows = collection.search_detailed(
-            body.get("vector"), k=k, threshold=threshold, ef_search=ef_search, filter_metadata=flt
-        )
+        rows = collection.search_detailed(body.get("vector"), **options)
         include = bool(body.get("include_metadata", False))
         return {
             "results": [
                 {"id": i, "score": s, **({"metadata": m} if include else {})} for i, s, m in rows
             ]
         }
+
+    def _h_search_batch(self, principal: Principal, params: Dict[str, str], body: Any) -> Any:
+        body = _object(body)
+        options = _search_options(body, self.max_k)
+        queries = body.get("vectors")
+        if not isinstance(queries, list) or not queries:
+            raise _bad("vectors must be a non-empty list of vectors")
+        if len(queries) > self.max_batch_queries:
+            raise HTTPError(413, "too_many_queries", f"at most {self.max_batch_queries}")
+        collection = self._manager(principal).get_collection(params["collection"])
+        batches = collection.search_batch(queries, **options)
+        return {"results": [[{"id": i, "score": s} for i, s in rows] for rows in batches]}
+
+
+def _search_options(body: Dict[str, Any], max_k: int) -> Dict[str, Any]:
+    k = body.get("k", 10)
+    if not isinstance(k, int) or isinstance(k, bool) or not 1 <= k <= max_k:
+        raise _bad(f"k must be an integer between 1 and {max_k}")
+    threshold = body.get("threshold", 0.0)
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+        raise _bad("threshold must be a number")
+    ef_search = body.get("ef_search")
+    if ef_search is not None and (not isinstance(ef_search, int) or not 1 <= ef_search <= 100_000):
+        raise _bad("ef_search must be an integer between 1 and 100000")
+    flt = body.get("filter")
+    if flt is not None and not isinstance(flt, dict):
+        raise _bad("filter must be an object")
+    return {"k": k, "threshold": threshold, "ef_search": ef_search, "filter_metadata": flt}
 
 
 def _reject_constant(value: str) -> Any:
