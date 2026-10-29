@@ -75,6 +75,8 @@ def main() -> None:
     started = time.perf_counter()
     for position, vector in enumerate(train):
         index.add_item(str(position), vector)
+        if (position + 1) % 100_000 == 0:
+            print(f"built {position + 1:,} in {time.perf_counter() - started:.0f}s", flush=True)
     build_seconds = time.perf_counter() - started
     index_bytes = rss_bytes() - memory_before
 
