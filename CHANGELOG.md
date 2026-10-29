@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Thread-safe collections (readers-writer lock), atomic multi-operation batches, and a checksummed write-ahead log with torn-tail recovery.
+- Persisted HNSW graph restored on startup instead of rebuilt; checkpoints carry SHA-256 checksums and only two generations are retained.
+- Process lock per collection, collection-name validation, and fault-injection/crash tests (SIGKILL, torn WAL, bit rot).
+- Versioned `/v1` HTTP API with API-key authentication, role and collection-pattern authorization, per-tenant storage isolation, Prometheus metrics, health/readiness endpoints, and graceful drain-and-checkpoint shutdown (`python -m vecstream serve`).
 - Exact-search recall oracle and three reproducible ANN experiments.
 - Comprehensive HNSW invariant validation and property-based mutation tests.
 - Versioned, crash-safe vector checkpoints with explicit corruption errors.

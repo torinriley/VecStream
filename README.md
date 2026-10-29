@@ -69,6 +69,12 @@ python -m benchmarks.ann_benchmark --experiment deletion --ef-search 20
 
 Use 100,000 vectors and dimensions 128/384/768 for full experiments; those runs are deliberately excluded from CI.
 
+## Running as a service
+
+`python -m vecstream serve` exposes a versioned, authenticated, multi-tenant HTTP API with
+durable writes (write-ahead log + checksummed checkpoints), a persisted HNSW graph, atomic batches,
+Prometheus metrics, health endpoints, and graceful shutdown. See `docs/api.md` and `docs/operations.md`.
+
 ## Storage correctness
 
 Each mutation writes an immutable `gen-*/` directory containing `manifest.json`, `vectors.npy`, `ids.json`, and `metadata.json`. Files are flushed and fsynced before an atomically replaced `CURRENT` pointer makes the generation visible. The pointer retains the prior generation. On open, VecStream validates version, shape, dtype, IDs, and finite values; it falls back once to the prior complete generation, otherwise raises `CorruptStoreError`. Corruption never becomes an empty database.
