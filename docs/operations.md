@@ -15,6 +15,14 @@ Unauthenticated serving requires the explicit `--insecure-no-auth` flag (develop
 Settings may also come from `VECSTREAM_*` environment variables (`DATA_DIR`, `HOST`, `PORT`,
 `KEYS_FILE`, `TLS_CERT`, `TLS_KEY`, `DRAIN_TIMEOUT`, `CHECKPOINT_OPS`, `LOG_LEVEL`).
 
+## Engines
+
+`python -m vecstream.native build` compiles `native/` (needs `cargo`) into `vecstream/_native/`, or set
+`VECSTREAM_NATIVE_LIB` to a prebuilt library. `serve --engine auto|native|python` (`VECSTREAM_ENGINE`) picks the
+index; `auto` uses native when the library loads. `python -m vecstream.native` prints availability and the active
+SIMD kernel. `/v1/collections/{c}` health and `/v1/metrics` report the engine in use. Switching engines needs no
+migration: the persisted graph is shared.
+
 ## Durability model
 
 1. A write is validated, appended to `wal.log` (one checksummed record per batch, fsynced), then applied.

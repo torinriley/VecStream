@@ -1,0 +1,16 @@
+[package]
+name = "vecstream_native"
+version = "0.1.0"
+edition = "2021"
+description = "Native HNSW engine for VecStream (C ABI, no dependencies)"
+license = "MIT"
+
+[lib]
+name = "vecstream_native"
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = false

@@ -322,6 +322,65 @@ class HNSWIndex:
         scored.sort()
         return [(item_id, float(1.0 - distance)) for distance, item_id in scored[:k]]
 
+    def stats(self) -> Dict[str, float]:
+        level0 = self.graphs.get(0, {})
+        degrees = [len(neighbors) for neighbors in level0.values()]
+        return {
+            "nodes": len(self.nodes),
+            "levels": (self.node_levels[self.ep] + 1) if self.ep is not None else 0,
+            "avg_degree": (sum(degrees) / len(degrees)) if degrees else 0.0,
+            "isolated": sum(1 for d in degrees if d == 0) if len(degrees) > 1 else 0,
+        }
+
+    def export_topology(self, order: Sequence[str]) -> Tuple[np.ndarray, np.ndarray, Optional[int]]:
+        """Levels, directed ``(level, src, dst)`` edges, and entry position by ``order``."""
+        position = {item_id: i for i, item_id in enumerate(order)}
+        if set(position) != set(self.nodes):
+            raise IndexInvariantError("index nodes differ from the vector store")
+        levels = np.fromiter((self.node_levels[i] for i in order), dtype=np.int32, count=len(order))
+        edges = [
+            (level, position[src], position[dst])
+            for level, graph in self.graphs.items()
+            for src, neighbors in graph.items()
+            for dst in neighbors
+        ]
+        entry = position[self.ep] if self.ep is not None else None
+        return levels, np.asarray(edges, dtype=np.int32).reshape(-1, 3), entry
+
+    @classmethod
+    def from_topology(
+        cls,
+        dim: int,
+        M: int,
+        ef_construction: int,
+        ml: int | None,
+        ids: Sequence[str],
+        vectors: Dict[str, np.ndarray],
+        levels: np.ndarray,
+        edges: np.ndarray,
+        ep: int | None,
+    ) -> "HNSWIndex":
+        """Rebuild from ``export_topology`` output; raises ``IndexInvariantError`` if unsound."""
+        index = cls(dim=dim, M=M, ef_construction=ef_construction, ml=ml)
+        for i, item_id in enumerate(ids):
+            raw = vectors[item_id]
+            index.nodes[item_id] = raw
+            index._normalized_nodes[item_id] = normalize(raw)
+            index.node_levels[item_id] = int(levels[i])
+        adjacency: Dict[int, Dict[str, Set[str]]] = {}
+        for item_id, level in index.node_levels.items():
+            for current in range(level + 1):
+                adjacency.setdefault(current, {})[item_id] = set()
+        try:
+            for level, src, dst in edges.tolist():
+                adjacency[level][ids[src]].add(ids[dst])
+        except (KeyError, IndexError) as exc:
+            raise IndexInvariantError(f"graph edge at an unpopulated node or level: {exc}") from exc
+        index.graphs = adjacency
+        index.ep = ids[ep] if ep is not None else None
+        index.validate()
+        return index
+
     def validate(self) -> None:
         """Raise ``IndexInvariantError`` with the first structural violation."""
         if bool(self.nodes) != (self.ep is not None):

@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import statistics
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from vecstream import HNSWIndex, VectorStore
+from vecstream.native import NativeHNSWIndex
 
 
 def environment() -> dict:
@@ -55,10 +58,8 @@ def exact_truth(vectors: dict[str, np.ndarray], queries: np.ndarray, k: int) -> 
     store = VectorStore()
     for item_id, vector in vectors.items():
         store.add_vector(item_id, vector)
-    return [
-        {item_id for item_id, _ in store.exact_search(query, k=k, threshold=-1.0)}
-        for query in queries
-    ]
+    rows = store.search_batch(list(queries), k=k, threshold=-1.0)
+    return [{item_id for item_id, _ in row} for row in rows]
 
 
 def evaluate(
@@ -89,7 +90,8 @@ def evaluate(
 def build(
     vectors: np.ndarray, order: np.ndarray, args: argparse.Namespace, graph_seed: int
 ) -> tuple[HNSWIndex, float]:
-    index = HNSWIndex(args.dim, M=args.M, ef_construction=args.ef_construction, seed=graph_seed)
+    engine = NativeHNSWIndex if getattr(args, "engine", "python") == "native" else HNSWIndex
+    index = engine(args.dim, M=args.M, ef_construction=args.ef_construction, seed=graph_seed)
     started = time.perf_counter()
     for position in order:
         index.add_item(str(int(position)), vectors[position])
@@ -108,7 +110,20 @@ def frontier(args: argparse.Namespace, vectors: np.ndarray, queries: np.ndarray)
             {"ef_search": ef, **evaluate(index, queries, truth, args.k, ef, args.warmups)}
             for ef in args.ef_search
         ],
+        **(batch_throughput(index, queries, args) if hasattr(index, "search_batch") else {}),
     }
+
+
+def batch_throughput(index: Any, queries: np.ndarray, args: argparse.Namespace) -> dict:
+    """Queries/second for native multi-threaded batches versus one thread."""
+    ef = args.ef_search[-1]
+    repeated = np.tile(queries, (max(1, 2000 // len(queries)), 1))
+    rows = []
+    for threads in sorted({1, 2, 4, os.cpu_count() or 1}):
+        started = time.perf_counter()
+        index.search_batch(repeated, k=args.k, ef_search=ef, threads=threads)
+        rows.append({"threads": threads, "qps": len(repeated) / (time.perf_counter() - started)})
+    return {"batch_throughput": {"ef_search": ef, "queries": len(repeated), "rows": rows}}
 
 
 def insertion_order(args: argparse.Namespace, vectors: np.ndarray, queries: np.ndarray) -> dict:
@@ -245,6 +260,7 @@ def main() -> None:
     parser.add_argument("--graph-seed", type=int, default=43)
     parser.add_argument("--order-seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
     parser.add_argument("--deletion-seed", type=int, default=44)
+    parser.add_argument("--engine", choices=["python", "native"], default="python")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     vectors, queries = dataset(args.vectors, args.dim, args.queries, args.dataset_seed)

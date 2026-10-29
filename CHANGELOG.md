@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Native HNSW engine in Rust (`native/`, no dependencies, C ABI via ctypes): contiguous vector slab, AVX2+FMA distance kernel with portable fallback, deletion repair, filtered traversal, GIL-free concurrent search, and multi-threaded batch search. Selected automatically when built; pure-Python engine remains the fallback. Checkpoints are engine-agnostic.
+- `python -m vecstream.native build`, `serve --engine`, `--engine` for the benchmark harness, CI jobs for the Rust crate (tests, clippy) and the native test pass.
 - Batch search (`Collection.search_batch`, `POST /v1/collections/{c}/search/batch`): validated all-or-nothing, one consistent snapshot, and a single matrix product on the exact path.
 - Regression suite: recall floors, a distance-evaluations-per-query cost ceiling, post-deletion and filtered recall floors, and golden on-disk format tests (including v1 checkpoint compatibility).
 - HNSW deletion now repairs the neighborhoods it leaves behind (recall after 20% random deletion: 0.952 vs 0.954 rebuilt, previously 0.916) and no longer scans every node to pick a new entry point.

@@ -1,6 +1,6 @@
 # VecStream
 
-VecStream is a compact vector-search engine centered on a from-scratch HNSW implementation. It is an engineering study of graph construction, ANN recall/latency tradeoffs, exact cosine ground truth, numerical behavior, and crash-safe local persistence. It does not wrap FAISS or hnswlib.
+VecStream is a compact vector-search engine centered on a from-scratch HNSW implementation. It is an engineering study of graph construction, ANN recall/latency tradeoffs, exact cosine ground truth, numerical behavior, and crash-safe local persistence. It does not wrap FAISS or hnswlib. A dependency-free Rust engine (`native/`) accelerates search and construction when built.
 
 The project is deliberately single-machine and small enough that the important algorithm fits in one module.
 
@@ -15,7 +15,8 @@ The project is deliberately single-machine and small enough that the important a
 - generation-based local checkpoints without pickle
 - recovery to the previous complete checkpoint and explicit corruption errors
 - property tests for randomized graph mutations
-- reproducible frontier, insertion-order, and deletion experiments
+- reproducible frontier, insertion-order, deletion, and filtered-search experiments
+- optional native Rust engine: AVX2 distance kernel, GIL-free parallel search, 50x faster construction (`python -m vecstream.native build`)
 
 ## Architecture
 
