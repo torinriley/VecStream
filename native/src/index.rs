@@ -24,6 +24,10 @@ impl Ord for Ord32 {
 
 type Item = (Ord32, u32);
 
+/// Hard cap on node level. With the default multiplier the chance of a level
+/// above 64 is below 2^-64, so this only ever rejects corrupt input.
+pub const MAX_LEVEL: usize = 64;
+
 thread_local! {
     /// Epoch-stamped visited set: clearing is O(1) instead of O(n) per query.
     static VISITED: RefCell<(Vec<u32>, u32)> = const { RefCell::new((Vec::new(), 0)) };
@@ -161,6 +165,7 @@ impl Index {
     fn random_level(&mut self) -> usize {
         let u = self.next_f64().max(f64::MIN_POSITIVE);
         let level = (-u.ln() * self.p.level_mult) as usize;
+        let level = level.min(MAX_LEVEL);
         match self.p.ml {
             Some(cap) => level.min(cap),
             None => level,
@@ -602,7 +607,10 @@ impl Index {
         ep: Option<u32>,
     ) -> Result<Index, String> {
         let n = levels.len();
-        if vectors.len() != n * dim {
+        if levels.iter().any(|&l| l > MAX_LEVEL as i32) {
+            return Err(format!("node level exceeds the maximum of {MAX_LEVEL}"));
+        }
+        if n.checked_mul(dim) != Some(vectors.len()) {
             return Err("vector slab length does not match node count".into());
         }
         let mut index = Index::new(dim, m, ef_construction, ml, seed);
