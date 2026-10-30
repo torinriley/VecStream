@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Real-embedding benchmark harness and GloVe-100 results (100K and 1.18M vectors) (#39)
+
+### Added
 - Native HNSW engine in Rust (`native/`, no dependencies, C ABI via ctypes): contiguous vector slab, AVX2+FMA distance kernel with portable fallback, deletion repair, filtered traversal, GIL-free concurrent search, and multi-threaded batch search. Selected automatically when built; pure-Python engine remains the fallback. Checkpoints are engine-agnostic.
 - `python -m vecstream.native build`, `serve --engine`, `--engine` for the benchmark harness, CI jobs for the Rust crate (tests, clippy) and the native test pass.
 - Batch search (`Collection.search_batch`, `POST /v1/collections/{c}/search/batch`): validated all-or-nothing, one consistent snapshot, and a single matrix product on the exact path.
