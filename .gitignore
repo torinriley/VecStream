@@ -47,3 +47,7 @@ benchmarks/results/*
 !benchmarks/results/frontier-1000x64.json
 !benchmarks/results/insertion-order-1000x64.json
 !benchmarks/results/deletion-1000x64.json
+
+# native engine build output
+native/target/
+vecstream/_native/
