@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- P0 production foundations: WAL, persisted HNSW, auth, versioned HTTP API (#35)
+
+### Added
 - Thread-safe collections (readers-writer lock), atomic multi-operation batches, and a checksummed write-ahead log with torn-tail recovery.
 - Persisted HNSW graph restored on startup instead of rebuilt; checkpoints carry SHA-256 checksums and only two generations are retained.
 - Process lock per collection, collection-name validation, and fault-injection/crash tests (SIGKILL, torn WAL, bit rot).
