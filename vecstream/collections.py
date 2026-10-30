@@ -30,6 +30,7 @@ from .binary_store import BinaryVectorStore
 from .errors import ClosedError, CorruptStoreError, InvalidVectorError, StoreLockedError
 from .hnsw_index import HNSWIndex
 from .hnsw_persist import dump_index, load_index
+from .native import MAX_EF, MAX_M, NativeHNSWIndex, native_available
 from .rwlock import ReadWriteLock
 from .vector_store import as_float32_vector
 from .wal import WriteAheadLog, fsync_directory
@@ -59,10 +60,10 @@ def validate_hnsw_params(params: Dict[str, Any]) -> Dict[str, Any]:
     m = params.get("M", 16)
     ef = params.get("ef_construction", 200)
     ml = params.get("ml")
-    if not isinstance(m, int) or isinstance(m, bool) or m < 2:
-        raise ValueError("M must be an integer >= 2")
-    if not isinstance(ef, int) or isinstance(ef, bool) or ef < m:
-        raise ValueError("ef_construction must be an integer >= M")
+    if not isinstance(m, int) or isinstance(m, bool) or not 2 <= m <= MAX_M:
+        raise ValueError(f"M must be an integer between 2 and {MAX_M}")
+    if not isinstance(ef, int) or isinstance(ef, bool) or not m <= ef <= MAX_EF:
+        raise ValueError(f"ef_construction must be an integer between M and {MAX_EF}")
     if ml is not None and (not isinstance(ml, int) or isinstance(ml, bool) or ml < 0):
         raise ValueError("ml must be a non-negative integer or null")
     return dict(params)
@@ -129,6 +130,7 @@ class Collection:
         checkpoint_bytes: int = 64 << 20,
         wal_corruption: str = "raise",
         allow_stale_checkpoint: bool = False,
+        engine: str = "auto",
     ):
         """Open (recovering if necessary) or create a collection.
 
@@ -141,6 +143,7 @@ class Collection:
             checkpoint_ops: Checkpoint automatically after this many logged operations
             checkpoint_bytes: ... or once the log reaches this size
             wal_corruption: ``"raise"`` or ``"truncate"`` on mid-log damage
+            engine: ``"auto"`` (native if built, else Python), ``"native"``, or ``"python"``
             allow_stale_checkpoint: accept data loss by loading the previous
                 checkpoint when the newest one is damaged (default: refuse)
         """
@@ -153,8 +156,18 @@ class Collection:
         self.checkpoint_ops = checkpoint_ops
         self.checkpoint_bytes = checkpoint_bytes
         self.wal_corruption = wal_corruption
+        if engine not in ("auto", "native", "python"):
+            raise ValueError("engine must be 'auto', 'native', or 'python'")
+        if engine == "native" and not native_available():
+            raise RuntimeError("engine='native' requested but the native library is not built")
+        self.engine = (
+            "native"
+            if engine == "native" or (engine == "auto" and native_available())
+            else "python"
+        )
+        self._index_class: Any = NativeHNSWIndex if self.engine == "native" else HNSWIndex
         self.allow_stale_checkpoint = allow_stale_checkpoint
-        self.hnsw_index: Optional[HNSWIndex] = None
+        self.hnsw_index: Any = None
         self._lock = ReadWriteLock()
         self._closed = False
         self._ops_since_checkpoint = 0
@@ -247,7 +260,9 @@ class Collection:
         if "hnsw.json" not in files:
             return False
         try:
-            index = load_index(files, list(self.store.vectors), self.store.vectors)
+            index = load_index(
+                files, list(self.store.vectors), self.store.vectors, self._index_class
+            )
         except (CorruptStoreError, KeyError) as exc:
             logger.warning(
                 "collection %s: persisted graph unusable, rebuilding: %s", self.name, exc
@@ -275,7 +290,7 @@ class Collection:
         if self.store.dimension is None:
             return
         params = self._index_params()
-        self.hnsw_index = HNSWIndex(dim=self.store.dimension, **params)
+        self.hnsw_index = self._index_class(dim=self.store.dimension, **params)
         for item_id, vector in self.store.vectors.items():
             self.hnsw_index.add_item(item_id, vector)
 
@@ -484,6 +499,15 @@ class Collection:
                 as_float32_vector(query, self.store.dimension)
             if not (self.use_hnsw and self.hnsw_index is not None) and not filter_metadata:
                 return self.store.search_batch(queries, k=k, threshold=threshold)
+            if self.engine == "native" and self.hnsw_index is not None and not filter_metadata:
+                # Native threads run the whole batch without holding the GIL.
+                rows = self.hnsw_index.search_batch(
+                    queries,
+                    k=k,
+                    ef_search=ef_search,
+                    min_score=threshold if threshold > 0 else None,
+                )
+                return [[(i, s) for i, s in row if s >= threshold][:k] for row in rows]
             return [
                 self._search_locked(query, k, threshold, ef_search, filter_metadata)
                 for query in queries
@@ -620,8 +644,7 @@ class Collection:
         """Cheap operational snapshot of the index and durability state."""
         with self._lock.read():
             index = self.hnsw_index
-            level0 = index.graphs.get(0, {}) if index else {}
-            degrees = [len(neighbors) for neighbors in level0.values()]
+            stats = index.stats() if index is not None else {}
             return {
                 "vectors": len(self.store.vectors),
                 "dimension": self.store.dimension,
@@ -630,12 +653,11 @@ class Collection:
                 "last_lsn": self.wal.last_lsn,
                 "last_checkpoint_time": self.last_checkpoint_time,
                 "checkpoint_failures": self.checkpoint_failures,
-                "index_nodes": len(index.nodes) if index else 0,
-                "index_levels": (index.node_levels[index.ep] + 1) if index and index.ep else 0,
-                "index_avg_degree": (sum(degrees) / len(degrees)) if degrees else 0.0,
-                "index_isolated_nodes": sum(1 for d in degrees if d == 0)
-                if len(degrees) > 1
-                else 0,
+                "engine": self.engine if index is not None else None,
+                "index_nodes": stats.get("nodes", 0),
+                "index_levels": stats.get("levels", 0),
+                "index_avg_degree": stats.get("avg_degree", 0.0),
+                "index_isolated_nodes": stats.get("isolated", 0),
                 "vector_bytes": sum(v.nbytes for v in self.store.vectors.values()),
                 "recovery": dict(self.recovery),
             }

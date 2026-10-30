@@ -38,6 +38,9 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--checkpoint-ops", type=int, default=int(_env("CHECKPOINT_OPS", "10000") or 10000)
     )
+    serve.add_argument(
+        "--engine", choices=["auto", "native", "python"], default=_env("ENGINE", "auto")
+    )
     serve.add_argument("--log-level", default=_env("LOG_LEVEL", "INFO"))
 
     keys = commands.add_parser("keys", help="manage API keys")
@@ -95,6 +98,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         tls_key=args.tls_key,
         drain_timeout=args.drain_timeout,
         checkpoint_ops=args.checkpoint_ops,
+        engine=args.engine,
     )
     signal.signal(signal.SIGTERM, lambda *_: server.request_stop())
     signal.signal(signal.SIGINT, lambda *_: server.request_stop())
