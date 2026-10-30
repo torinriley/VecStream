@@ -17,3 +17,15 @@
 - Tenant isolation is by separate directories and credentials inside one process and one filesystem trust domain; it is not a defense against a compromised host or process.
 - HNSW quality varies with distribution and insertion order. The committed five-order experiment measured recall@10 from 0.904 to 0.922. Clustered and concentrated distribution studies remain unmeasured.
 - Large-scale measurement (native engine, 100,000 x 128 i.i.d. Gaussian vectors, M=16, ef_construction=100, 4 cores; `benchmarks/results/native-frontier-100000x128.json`): build 80s (1,254 inserts/s); recall@10 0.16 / 0.28 / 0.46 / 0.66 at ef_search 40 / 80 / 160 / 320; p50 0.54-1.73 ms; batch throughput 559 / 1,250 / 2,381 qps on 1 / 2 / 4 threads. I.i.d. Gaussian data has no cluster structure and is close to the worst case for graph ANN, so these recall numbers are a floor, not a prediction for real embeddings. Realistic embedding distributions and 1M+ vectors remain unmeasured.
+- Real-embedding measurements (native engine, GloVe-100 angular from ann-benchmarks, M=16, ef_construction=100, 4 cores, exact ground truth recomputed per prefix; `benchmarks/dataset_benchmark.py`, results in `benchmarks/results/glove-100-angular-*.json`):
+
+  | Vectors | ef_search | recall@10 | p50 / p99 ms | batch qps (1 / 4 threads) |
+  | --- | --- | --- | --- | --- |
+  | 100,000 | 80 | 0.868 | 0.38 / 0.73 | 2,845 / 9,959 |
+  | 100,000 | 160 | 0.926 | 0.66 / 1.17 | 1,672 / 6,398 |
+  | 100,000 | 320 | 0.966 | 1.27 / 2.82 | 704 / 2,449 |
+  | 1,183,514 | 160 | 0.854 | 1.10 / 1.79 | 928 / 3,702 |
+  | 1,183,514 | 320 | 0.905 | 1.94 / 4.19 | 418 / 1,841 |
+  | 1,183,514 | 640 | 0.942 | 4.23 / 7.58 | 260 / 1,016 |
+
+  Full 1.18M build: 1,153s (1,026 inserts/s), about 830 MB of additional resident memory for the index. Reaching 0.95 recall at 1M requires roughly ef_search 700+ at this M; raising M and ef_construction would trade build time and memory for recall and has not been tuned. Single runs on one machine: expect variance, and treat latencies as indicative.
