@@ -5,9 +5,10 @@ built, and everything falls back to the pure-Python ``HNSWIndex``. Build it with
 ``python -m vecstream.native build`` (requires a Rust toolchain).
 
 ctypes releases the GIL for the duration of each foreign call, so concurrent
-searches on one index run in parallel. Mutation is serialized by the caller
-(``Collection`` holds its write lock); a handle must not be mutated while
-searches are in flight.
+searches on one index run in parallel. The wrapper and the native handle each
+carry a readers-writer lock: searches share, mutations are exclusive, and misuse
+from several threads blocks rather than races. A predicate callback must not call
+back into a mutating method of the same index (it would deadlock).
 """
 
 from __future__ import annotations
@@ -23,9 +24,13 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .errors import CorruptStoreError, IndexInvariantError
+from .rwlock import ReadWriteLock
 from .vector_store import as_float32_vector, normalize
 
-ABI_VERSION = 1
+ABI_VERSION = 2
+MAX_DIM = 65_536  # mirrors the limits enforced inside the native library
+MAX_M = 1_024
+MAX_EF = 1_000_000
 _LIB_NAME = {"darwin": "libvecstream_native.dylib", "win32": "vecstream_native.dll"}.get(
     sys.platform, "libvecstream_native.so"
 )
@@ -91,7 +96,7 @@ def _bind(lib: ctypes.CDLL) -> None:
         "vs_stats": (c.c_int32, [c.c_void_p, c.POINTER(c.c_double)]),
         "vs_validate": (c.c_int32, [c.c_void_p, c.c_char_p, c.c_uint32]),
         "vs_export_sizes": (c.c_int32, [c.c_void_p, i64p]),
-        "vs_export": (c.c_int32, [c.c_void_p, i32p, i32p]),
+        "vs_export": (c.c_int32, [c.c_void_p, i32p, c.c_uint64, i32p, c.c_uint64]),
         "vs_import": (
             c.c_void_p,
             [c.c_uint32, c.c_uint32, c.c_uint32, c.c_int64, c.c_uint64, c.c_uint64, f32p, i32p]
@@ -171,8 +176,11 @@ class NativeHNSWIndex:
         ml: int | None = None,
         seed: int | None = None,
     ) -> None:
-        if dim < 1 or M < 2 or ef_construction < M:
-            raise ValueError("dim >= 1, M >= 2, and ef_construction >= M are required")
+        if not (1 <= dim <= MAX_DIM and 2 <= M <= MAX_M and M <= ef_construction <= MAX_EF):
+            raise ValueError(
+                f"require 1 <= dim <= {MAX_DIM}, 2 <= M <= {MAX_M}, "
+                f"M <= ef_construction <= {MAX_EF}"
+            )
         lib = load_library()
         if lib is None:
             raise RuntimeError(f"native engine unavailable: {_load_error}")
@@ -186,6 +194,7 @@ class NativeHNSWIndex:
 
     def _attach(self, handle: int, nodes: Dict[str, int], id_of: List[Optional[str]]) -> None:
         self._handle: Optional[int] = handle
+        self._lock = ReadWriteLock()  # keeps the ID tables and the native graph in step
         self.nodes = nodes
         self._id_of = id_of
 
@@ -247,18 +256,23 @@ class NativeHNSWIndex:
     def add_item(self, id: str, vector: Sequence[float] | np.ndarray) -> None:
         item_id = str(id)
         value = normalize(as_float32_vector(vector, self.dim))
-        if item_id in self.nodes:
-            self.remove_item(item_id)
-        slot = self._lib.vs_add(self._live(), _ptr(value, ctypes.c_float))
-        if slot < 0:
-            raise RuntimeError(f"native add failed with code {slot}")
-        if slot == len(self._id_of):
-            self._id_of.append(item_id)
-        else:
-            self._id_of[slot] = item_id
-        self.nodes[item_id] = int(slot)
+        with self._lock.write():
+            if item_id in self.nodes:
+                self._remove_locked(item_id)
+            slot = self._lib.vs_add(self._live(), _ptr(value, ctypes.c_float))
+            if slot < 0:
+                raise RuntimeError(f"native add failed with code {slot}")
+            if slot == len(self._id_of):
+                self._id_of.append(item_id)
+            else:
+                self._id_of[slot] = item_id
+            self.nodes[item_id] = int(slot)
 
     def remove_item(self, id: str) -> None:
+        with self._lock.write():
+            self._remove_locked(id)
+
+    def _remove_locked(self, id: str) -> None:
         if id not in self.nodes:
             raise KeyError(f"Item with ID {id} not found in index")
         slot = self.nodes.pop(id)
@@ -278,6 +292,18 @@ class NativeHNSWIndex:
         if k < 1:
             raise ValueError("k must be at least 1")
         q = normalize(as_float32_vector(query, self.dim))
+        with self._lock.read():
+            return self._search_locked(q, k, ef_search, predicate, min_score, max_visits)
+
+    def _search_locked(
+        self,
+        q: np.ndarray,
+        k: int,
+        ef_search: int | None,
+        predicate: Optional[Callable[[str], bool]],
+        min_score: Optional[float],
+        max_visits: Optional[int],
+    ) -> List[Tuple[str, float]]:
         if not self.nodes:
             return []
         slots = np.empty(k, dtype=np.uint32)
@@ -325,6 +351,17 @@ class NativeHNSWIndex:
         if k < 1:
             raise ValueError("k must be at least 1")
         batch = np.stack([normalize(as_float32_vector(q, self.dim)) for q in queries])
+        with self._lock.read():
+            return self._batch_locked(batch, k, ef_search, min_score, threads)
+
+    def _batch_locked(
+        self,
+        batch: np.ndarray,
+        k: int,
+        ef_search: int | None,
+        min_score: Optional[float],
+        threads: int,
+    ) -> List[List[Tuple[str, float]]]:
         n = len(batch)
         if not self.nodes:
             return [[] for _ in range(n)]
@@ -351,6 +388,10 @@ class NativeHNSWIndex:
         ]
 
     def validate(self) -> None:
+        with self._lock.read():
+            self._validate_locked()
+
+    def _validate_locked(self) -> None:
         message = ctypes.create_string_buffer(256)
         code = self._lib.vs_validate(self._live(), message, 256)
         if code != 0:
@@ -360,7 +401,8 @@ class NativeHNSWIndex:
 
     def stats(self) -> Dict[str, float]:
         out = (ctypes.c_double * 5)()
-        self._lib.vs_stats(self._live(), out)
+        with self._lock.read():
+            self._lib.vs_stats(self._live(), out)
         return {
             "nodes": int(out[0]),
             "levels": int(out[1]),
@@ -370,6 +412,10 @@ class NativeHNSWIndex:
 
     def export_topology(self, order: Sequence[str]) -> Tuple[np.ndarray, np.ndarray, Optional[int]]:
         """Levels, directed edges, and entry position with nodes numbered by ``order``."""
+        with self._lock.read():
+            return self._export_locked(order)
+
+    def _export_locked(self, order: Sequence[str]) -> Tuple[np.ndarray, np.ndarray, Optional[int]]:
         if set(order) != set(self.nodes):
             raise IndexInvariantError("index nodes differ from the vector store")
         sizes = (ctypes.c_int64 * 3)()
@@ -377,7 +423,15 @@ class NativeHNSWIndex:
         slots, edge_count, ep = int(sizes[0]), int(sizes[1]), int(sizes[2])
         levels = np.empty(slots, dtype=np.int32)
         edges = np.empty((edge_count, 3), dtype=np.int32)
-        self._lib.vs_export(self._live(), _ptr(levels, ctypes.c_int32), _ptr(edges, ctypes.c_int32))
+        code = self._lib.vs_export(
+            self._live(),
+            _ptr(levels, ctypes.c_int32),
+            slots,
+            _ptr(edges, ctypes.c_int32),
+            edge_count,
+        )
+        if code != 0:
+            raise RuntimeError(f"native export failed with code {code} (index changed mid-export?)")
         position = np.full(slots, -1, dtype=np.int64)
         for i, item_id in enumerate(order):
             position[self.nodes[item_id]] = i
