@@ -11,11 +11,13 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 from . import __version__
 from .auth import KeyStore, Principal
+from .backup import INFO_FILE, default_backup_id, list_backups, validate_backup_id
 from .collections import validate_name
 from .errors import (
     AuthenticationError,
@@ -65,6 +67,9 @@ ROUTES = [
     _Route("DELETE", "/v1/collections/{collection}", "manage", "delete_collection"),
     _Route("POST", "/v1/collections/{collection}/checkpoint", "manage", "checkpoint"),
     _Route("POST", "/v1/collections/{collection}/verify", "manage", "verify"),
+    _Route("POST", "/v1/collections/{collection}/backup", "manage", "backup"),
+    _Route("POST", "/v1/collections/{collection}/restore", "manage", "restore"),
+    _Route("GET", "/v1/backups", "manage", "list_backups"),
     _Route("POST", "/v1/collections/{collection}/batch", "write", "batch"),
     _Route("POST", "/v1/collections/{collection}/search", "read", "search"),
     _Route("POST", "/v1/collections/{collection}/search/batch", "read", "search_batch"),
@@ -465,6 +470,64 @@ class VecStreamServer:
 
     def _h_verify(self, principal: Principal, params: Dict[str, str], _b: Any) -> Any:
         return self._manager(principal).get_collection(params["collection"]).verify()
+
+    def _backup_dir(self, principal: Principal, backup_id: Any) -> Path:
+        try:
+            validate_backup_id(backup_id)
+        except ValueError as exc:
+            raise _bad(str(exc)) from exc
+        assert principal.tenant is not None
+        return Path(self.service.backup_root(principal.tenant)) / backup_id
+
+    def _h_backup(self, principal: Principal, params: Dict[str, str], body: Any) -> Any:
+        body = _object(body)
+        name = params["collection"]
+        backup_id = body.get("id", default_backup_id(name))
+        destination = self._backup_dir(principal, backup_id)
+        collection = self._manager(principal).get_collection(name)
+        try:
+            info = collection.backup(destination)
+        except FileExistsError as exc:
+            raise HTTPError(409, "already_exists", f"backup {backup_id!r} already exists") from exc
+        return 201, {"id": backup_id, **info}, "application/json"
+
+    def _h_restore(self, principal: Principal, params: Dict[str, str], body: Any) -> Any:
+        body = _object(body)
+        source = self._backup_dir(principal, body.get("backup"))
+        if not source.is_dir():
+            raise HTTPError(404, "not_found", f"backup {body.get('backup')!r} does not exist")
+        hnsw_params = body.get("hnsw_params")
+        if hnsw_params is not None and not isinstance(hnsw_params, dict):
+            raise _bad("hnsw_params must be an object")
+        try:
+            origin = json.loads((source / INFO_FILE).read_text(encoding="utf-8")).get("collection")
+        except (OSError, ValueError, AttributeError):
+            origin = None
+        if not isinstance(origin, str):
+            raise HTTPError(422, "invalid_backup", "backup is unreadable or damaged")
+        principal.require("manage", origin)  # a key may only restore data it could back up
+        manager = self._manager(principal)
+        name = params["collection"]
+        try:
+            manager.restore_collection(name, source, hnsw_params=hnsw_params)
+        except CorruptStoreError as exc:
+            raise HTTPError(422, "invalid_backup", f"backup failed verification: {exc}") from exc
+        except ValueError as exc:
+            if "already exists" in str(exc):
+                raise HTTPError(409, "already_exists", str(exc)) from exc
+            raise _bad(str(exc)) from exc
+        return 201, manager.get_collection_stats(name), "application/json"
+
+    def _h_list_backups(self, principal: Principal, *_: Any) -> Dict[str, Any]:
+        assert principal.tenant is not None
+        root = Path(self.service.backup_root(principal.tenant))
+        rows = [
+            row
+            for row in list_backups(root)
+            if isinstance(row.get("collection"), str)
+            and principal.allows("manage", row["collection"])
+        ]
+        return {"backups": rows}
 
     def _h_put_vector(self, principal: Principal, params: Dict[str, str], body: Any) -> Any:
         body = _object(body)

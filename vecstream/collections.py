@@ -20,12 +20,19 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .backup import (
+    finalize_backup,
+    install_backup,
+    stage_generation,
+    verify_backup,
+)
 from .binary_store import BinaryVectorStore
 from .errors import ClosedError, CorruptStoreError, InvalidVectorError, StoreLockedError
 from .hnsw_index import HNSWIndex
@@ -197,6 +204,7 @@ class Collection:
         self.checkpoint_failures = 0
         self.recovery: Dict[str, Any] = {}
         self._lock_fd = self._acquire_process_lock()
+        self._remove_backup_debris()
         try:
             self._open_state()
         except BaseException:
@@ -217,6 +225,11 @@ class Collection:
                 f"collection {self.name!r} is already open in another process or object"
             ) from exc
         return descriptor
+
+    def _remove_backup_debris(self) -> None:
+        """Staging directories from a backup interrupted by a crash (we hold the process lock)."""
+        for entry in Path(self.collection_dir).glob(".backup-*"):
+            shutil.rmtree(entry, ignore_errors=True)
 
     def _release_process_lock(self) -> None:
         if self._lock_fd >= 0:
@@ -466,6 +479,33 @@ class Collection:
         self.wal.reset(lsn)  # crash before this is harmless: replay skips lsn <= checkpoint
         self._ops_since_checkpoint = 0
         self.last_checkpoint_time = time.time()
+
+    def backup(self, destination: "str | os.PathLike[str]") -> Dict[str, Any]:
+        """Write a verified, self-contained backup to ``destination`` (which must not exist).
+
+        Writers and searches are paused only for a checkpoint and for linking the immutable
+        generation files; copying and verification run while the collection serves traffic.
+        The backup includes the persisted graph, so restoring it does not rebuild the index.
+        """
+        stage = Path(self.collection_dir) / f".backup-{uuid.uuid4().hex}"
+        try:
+            with self._lock.write():
+                self._check_open()
+                self._checkpoint_locked()
+                generation = self.store.generation_dir
+                assert generation is not None  # a checkpoint was just written
+                stage_generation(generation, stage)
+                info = {
+                    "collection": self.name,
+                    "lsn": self.store.checkpoint_lsn,
+                    "vectors": len(self.store.vectors),
+                    "dimension": self.store.dimension,
+                    "use_hnsw": self.use_hnsw,
+                    "hnsw_params": dict(self.hnsw_params),
+                }
+            return finalize_backup(stage, Path(destination), info)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
 
     def verify(self) -> Dict[str, Any]:
         """Verify checkpoint checksums, graph invariants, and store/index agreement."""
@@ -877,6 +917,75 @@ class CollectionManager:
                 metadata.get("hnsw_params", LEGACY_HNSW_PARAMS),
                 **self.collection_options,
             )
+            self.collections[name] = collection
+            return collection
+
+    def restore_collection(
+        self,
+        name: str,
+        source: "str | os.PathLike[str]",
+        use_hnsw: Optional[bool] = None,
+        hnsw_params: Optional[Dict[str, Any]] = None,
+    ) -> Collection:
+        """Create collection ``name`` from a backup made by ``Collection.backup``.
+
+        The backup is fully verified first; the collection appears atomically or not at all.
+        HNSW parameters default to those recorded in the backup, so the saved graph is reused.
+
+        Raises:
+            ValueError: the name is invalid or taken, or the parameters are rejected
+            CorruptStoreError: the backup is damaged or unsupported
+        """
+        validate_name(name)
+        source_path = Path(source)
+        info = verify_backup(source_path)
+        with self._lock:
+            self._check_open()
+            if name in self.collections or name in self.collections_metadata:
+                raise ValueError(f"Collection '{name}' already exists")
+            params = validate_hnsw_params(
+                dict(hnsw_params if hnsw_params is not None else info.get("hnsw_params") or {})
+            )
+            use_hnsw_flag = (
+                use_hnsw if use_hnsw is not None else bool(info.get("use_hnsw", self.use_hnsw))
+            )
+            staging = Path(self.collections_dir) / f".restore-{uuid.uuid4().hex}"
+            target = Path(self.collections_dir) / name
+            try:
+                staging.mkdir()
+                install_backup(source_path, staging, int(info.get("lsn", 0)))
+                if target.exists():  # debris from a crashed create or delete (no metadata entry)
+                    shutil.rmtree(target)
+                os.rename(staging, target)
+                fsync_directory(Path(self.collections_dir))
+            except BaseException:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+            try:
+                collection = Collection(
+                    name, self.base_storage_dir, use_hnsw_flag, params, **self.collection_options
+                )
+            except BaseException:
+                shutil.rmtree(target, ignore_errors=True)
+                raise
+            self.collections_metadata[name] = {
+                "name": name,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "use_hnsw": use_hnsw_flag,
+                "hnsw_params": params,
+                "restored_from": {
+                    "collection": info.get("collection"),
+                    "lsn": info.get("lsn"),
+                    "backup_created_at": info.get("created_at"),
+                },
+            }
+            try:
+                self._save_metadata()
+            except BaseException:
+                del self.collections_metadata[name]
+                collection.close()
+                shutil.rmtree(target, ignore_errors=True)
+                raise
             self.collections[name] = collection
             return collection
 
