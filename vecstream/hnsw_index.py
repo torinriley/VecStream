@@ -359,8 +359,11 @@ class HNSWIndex:
         levels: np.ndarray,
         edges: np.ndarray,
         ep: int | None,
+        quantization: str = "none",
     ) -> "HNSWIndex":
         """Rebuild from ``export_topology`` output; raises ``IndexInvariantError`` if unsound."""
+        if quantization != "none":
+            raise ValueError("the pure-Python engine does not support quantization")
         index = cls(dim=dim, M=M, ef_construction=ef_construction, ml=ml)
         for i, item_id in enumerate(ids):
             raw = vectors[item_id]
