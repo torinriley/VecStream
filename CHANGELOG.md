@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Batch search, regression gates, and phase-fair lock (#37)
+
+### Added
 - Batch search (`Collection.search_batch`, `POST /v1/collections/{c}/search/batch`): validated all-or-nothing, one consistent snapshot, and a single matrix product on the exact path.
 - Regression suite: recall floors, a distance-evaluations-per-query cost ceiling, post-deletion and filtered recall floors, and golden on-disk format tests (including v1 checkpoint compatibility).
 - HNSW deletion now repairs the neighborhoods it leaves behind (recall after 20% random deletion: 0.952 vs 0.954 rebuilt, previously 0.916) and no longer scans every node to pick a new entry point.
