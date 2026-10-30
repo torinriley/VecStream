@@ -1,10 +1,17 @@
 //! Native HNSW engine for VecStream, exposed through a small C ABI.
 //!
-//! Safety contract (enforced by the Python wrapper and re-checked here):
-//! every pointer is valid for the stated length; an `Index` handle is mutated
-//! by at most one thread at a time and never concurrently with a search.
-//! Concurrent searches on one handle are supported. Panics never cross the
-//! boundary: they are caught and reported as error codes.
+//! Safety contract:
+//! * Every pointer is valid for the length implied by its arguments.
+//! * A handle is internally synchronized with a readers-writer lock: searches
+//!   run concurrently, mutations are exclusive. Misuse from several threads
+//!   therefore blocks instead of racing. A predicate callback must not call
+//!   back into a mutating function on the same handle (that would deadlock).
+//! * A handle must not be used after `vs_free`.
+//! * Panics never cross the boundary: they are caught and reported as error
+//!   codes, and a panic inside a mutation poisons the handle (all later calls
+//!   fail closed with `ERR_STATE`).
+//! * Parameters that would force absurd allocations (which abort the process,
+//!   something `catch_unwind` cannot intercept) are rejected up front.
 
 mod distance;
 mod index;
@@ -13,16 +20,46 @@ use index::{Filter, Index};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 pub const ERR_ARGUMENT: i32 = -1;
 pub const ERR_PANIC: i32 = -2;
 pub const ERR_STATE: i32 = -3;
+pub const ERR_CAPACITY: i32 = -4;
+
+pub const MAX_DIM: u32 = 65_536;
+pub const MAX_M: u32 = 1_024;
+pub const MAX_EF_CONSTRUCTION: u32 = 1_000_000;
+const MAX_SLOTS: usize = (u32::MAX - 2) as usize;
 
 type Predicate = Option<extern "C" fn(u32) -> i32>;
 
+struct Handle {
+    index: RwLock<Index>,
+}
+
 fn guarded<T>(fallback: T, body: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(fallback)
+}
+
+unsafe fn handle<'a>(ptr: *const c_void) -> Option<&'a Handle> {
+    (ptr as *const Handle).as_ref()
+}
+
+fn read(h: &Handle) -> Option<RwLockReadGuard<'_, Index>> {
+    h.index.read().ok()
+}
+
+fn write(h: &Handle) -> Option<RwLockWriteGuard<'_, Index>> {
+    h.index.write().ok()
+}
+
+fn params_ok(dim: u32, m: u32, ef_construction: u32) -> bool {
+    (1..=MAX_DIM).contains(&dim)
+        && (2..=MAX_M).contains(&m)
+        && ef_construction >= m
+        && ef_construction <= MAX_EF_CONSTRUCTION
 }
 
 #[no_mangle]
@@ -42,33 +79,27 @@ pub extern "C" fn vs_force_scalar(on: i32) {
     distance::force_scalar(on != 0);
 }
 
+/// Returns null for invalid parameters (`dim` 1..=65536, `m` 2..=1024,
+/// `ef_construction` in `m..=1_000_000`).
 #[no_mangle]
 pub extern "C" fn vs_new(dim: u32, m: u32, ef_construction: u32, ml: i64, seed: u64) -> *mut c_void {
     guarded(std::ptr::null_mut(), || {
-        if dim == 0 || m < 2 || ef_construction < m {
+        if !params_ok(dim, m, ef_construction) {
             return std::ptr::null_mut();
         }
         let ml = if ml < 0 { None } else { Some(ml as usize) };
         let index = Index::new(dim as usize, m as usize, ef_construction as usize, ml, seed);
-        Box::into_raw(Box::new(index)) as *mut c_void
+        Box::into_raw(Box::new(Handle { index: RwLock::new(index) })) as *mut c_void
     })
 }
 
 /// # Safety
-/// `handle` must come from `vs_new`/`vs_import` and not be used afterwards.
+/// `ptr` must be null or come from `vs_new`/`vs_import`, and not be used afterwards.
 #[no_mangle]
-pub unsafe extern "C" fn vs_free(handle: *mut c_void) {
-    if !handle.is_null() {
-        drop(Box::from_raw(handle as *mut Index));
+pub unsafe extern "C" fn vs_free(ptr: *mut c_void) {
+    if !ptr.is_null() {
+        drop(Box::from_raw(ptr as *mut Handle));
     }
-}
-
-unsafe fn index_ref<'a>(handle: *const c_void) -> Option<&'a Index> {
-    (handle as *const Index).as_ref()
-}
-
-unsafe fn index_mut<'a>(handle: *mut c_void) -> Option<&'a mut Index> {
-    (handle as *mut Index).as_mut()
 }
 
 /// Insert one normalized vector of the index dimension; returns its slot or a negative error.
@@ -76,11 +107,17 @@ unsafe fn index_mut<'a>(handle: *mut c_void) -> Option<&'a mut Index> {
 /// # Safety
 /// `vector` must point to `dim` readable floats.
 #[no_mangle]
-pub unsafe extern "C" fn vs_add(handle: *mut c_void, vector: *const f32) -> i64 {
+pub unsafe extern "C" fn vs_add(ptr: *mut c_void, vector: *const f32) -> i64 {
     guarded(ERR_PANIC as i64, || {
-        let (Some(index), false) = (index_mut(handle), vector.is_null()) else {
+        let (Some(h), false) = (handle(ptr), vector.is_null()) else {
             return ERR_ARGUMENT as i64;
         };
+        let Some(mut index) = write(h) else {
+            return ERR_STATE as i64;
+        };
+        if index.slots() >= MAX_SLOTS {
+            return ERR_CAPACITY as i64;
+        }
         let v = slice::from_raw_parts(vector, index.p.dim);
         if v.iter().any(|x| !x.is_finite()) {
             return ERR_ARGUMENT as i64;
@@ -89,31 +126,38 @@ pub unsafe extern "C" fn vs_add(handle: *mut c_void, vector: *const f32) -> i64 
     })
 }
 
+/// Returns 1 if removed, 0 if the slot was not live.
+///
 /// # Safety
-/// `handle` must be a live index handle.
+/// `ptr` must be null or a live handle.
 #[no_mangle]
-pub unsafe extern "C" fn vs_remove(handle: *mut c_void, slot: u32) -> i32 {
-    guarded(ERR_PANIC, || match index_mut(handle) {
-        Some(index) => i32::from(index.remove(slot)),
+pub unsafe extern "C" fn vs_remove(ptr: *mut c_void, slot: u32) -> i32 {
+    guarded(ERR_PANIC, || match handle(ptr).map(write) {
+        Some(Some(mut index)) => i32::from(index.remove(slot)),
+        Some(None) => ERR_STATE,
         None => ERR_ARGUMENT,
     })
 }
 
 /// # Safety
-/// `handle` must be null or a live index handle.
+/// `ptr` must be null or a live handle.
 #[no_mangle]
-pub unsafe extern "C" fn vs_len(handle: *const c_void) -> i64 {
-    guarded(ERR_PANIC as i64, || {
-        index_ref(handle).map_or(ERR_ARGUMENT as i64, |i| i.len() as i64)
+pub unsafe extern "C" fn vs_len(ptr: *const c_void) -> i64 {
+    guarded(ERR_PANIC as i64, || match handle(ptr).map(read) {
+        Some(Some(index)) => index.len() as i64,
+        Some(None) => ERR_STATE as i64,
+        None => ERR_ARGUMENT as i64,
     })
 }
 
 /// # Safety
-/// `handle` must be null or a live index handle.
+/// `ptr` must be null or a live handle.
 #[no_mangle]
-pub unsafe extern "C" fn vs_slots(handle: *const c_void) -> i64 {
-    guarded(ERR_PANIC as i64, || {
-        index_ref(handle).map_or(ERR_ARGUMENT as i64, |i| i.slots() as i64)
+pub unsafe extern "C" fn vs_slots(ptr: *const c_void) -> i64 {
+    guarded(ERR_PANIC as i64, || match handle(ptr).map(read) {
+        Some(Some(index)) => index.slots() as i64,
+        Some(None) => ERR_STATE as i64,
+        None => ERR_ARGUMENT as i64,
     })
 }
 
@@ -137,10 +181,10 @@ fn build_filter<'a>(
 /// `fallback_used` (nullable) is set to 1 when the exact-scan fallback ran.
 ///
 /// # Safety
-/// Pointers must be valid for `dim`, `k`, `k` elements respectively.
+/// `query` holds `dim` floats; `out_slots` and `out_scores` hold `k` elements.
 #[no_mangle]
 pub unsafe extern "C" fn vs_search(
-    handle: *const c_void,
+    ptr: *const c_void,
     query: *const f32,
     k: u32,
     ef: u32,
@@ -152,12 +196,15 @@ pub unsafe extern "C" fn vs_search(
     fallback_used: *mut i32,
 ) -> i64 {
     guarded(ERR_PANIC as i64, || {
-        let Some(index) = index_ref(handle) else {
+        let Some(h) = handle(ptr) else {
             return ERR_ARGUMENT as i64;
         };
         if query.is_null() || out_slots.is_null() || out_scores.is_null() || k == 0 || ef == 0 {
             return ERR_ARGUMENT as i64;
         }
+        let Some(index) = read(h) else {
+            return ERR_STATE as i64;
+        };
         let q = slice::from_raw_parts(query, index.p.dim);
         let adapter = |slot: u32| predicate.is_some_and(|p| p(slot) != 0);
         let filter = build_filter(predicate, &adapter, min_score, max_visits, ef as usize);
@@ -180,7 +227,7 @@ pub unsafe extern "C" fn vs_search(
 /// `queries` holds `n*dim` floats; `out_slots`/`out_scores` hold `n*k`; `out_counts` holds `n`.
 #[no_mangle]
 pub unsafe extern "C" fn vs_search_batch(
-    handle: *const c_void,
+    ptr: *const c_void,
     queries: *const f32,
     n: u32,
     k: u32,
@@ -192,7 +239,7 @@ pub unsafe extern "C" fn vs_search_batch(
     out_counts: *mut u32,
 ) -> i32 {
     guarded(ERR_PANIC, || {
-        let Some(index) = index_ref(handle) else {
+        let Some(h) = handle(ptr) else {
             return ERR_ARGUMENT;
         };
         if queries.is_null() || out_slots.is_null() || out_scores.is_null() || out_counts.is_null() {
@@ -201,10 +248,17 @@ pub unsafe extern "C" fn vs_search_batch(
         if n == 0 || k == 0 || ef == 0 {
             return ERR_ARGUMENT;
         }
+        let Some(guard) = read(h) else {
+            return ERR_STATE;
+        };
+        let index: &Index = &guard;
         let (n, k, dim) = (n as usize, k as usize, index.p.dim);
-        let qs = slice::from_raw_parts(queries, n * dim);
-        let slots = slice::from_raw_parts_mut(out_slots, n * k);
-        let scores = slice::from_raw_parts_mut(out_scores, n * k);
+        let (Some(total_q), Some(total_out)) = (n.checked_mul(dim), n.checked_mul(k)) else {
+            return ERR_ARGUMENT;
+        };
+        let qs = slice::from_raw_parts(queries, total_q);
+        let slots = slice::from_raw_parts_mut(out_slots, total_out);
+        let scores = slice::from_raw_parts_mut(out_scores, total_out);
         let counts = slice::from_raw_parts_mut(out_counts, n);
         let workers = (threads.max(1) as usize).min(n);
         let per = n.div_ceil(workers);
@@ -250,10 +304,13 @@ pub unsafe extern "C" fn vs_search_batch(
 /// # Safety
 /// `out` must point to 5 writable doubles.
 #[no_mangle]
-pub unsafe extern "C" fn vs_stats(handle: *const c_void, out: *mut f64) -> i32 {
+pub unsafe extern "C" fn vs_stats(ptr: *const c_void, out: *mut f64) -> i32 {
     guarded(ERR_PANIC, || {
-        let (Some(index), false) = (index_ref(handle), out.is_null()) else {
+        let (Some(h), false) = (handle(ptr), out.is_null()) else {
             return ERR_ARGUMENT;
+        };
+        let Some(index) = read(h) else {
+            return ERR_STATE;
         };
         let s = index.stats();
         let values = [s.nodes as f64, s.levels as f64, s.avg_degree0, s.isolated0 as f64, s.free_slots as f64];
@@ -267,12 +324,15 @@ pub unsafe extern "C" fn vs_stats(handle: *const c_void, out: *mut f64) -> i32 {
 /// Returns 0 when valid, 1 when a violation was written (NUL-terminated) to `message`.
 ///
 /// # Safety
-/// `message` must hold `capacity` bytes.
+/// `message` must hold `capacity` bytes (or be null).
 #[no_mangle]
-pub unsafe extern "C" fn vs_validate(handle: *const c_void, message: *mut u8, capacity: u32) -> i32 {
+pub unsafe extern "C" fn vs_validate(ptr: *const c_void, message: *mut u8, capacity: u32) -> i32 {
     guarded(ERR_PANIC, || {
-        let Some(index) = index_ref(handle) else {
+        let Some(h) = handle(ptr) else {
             return ERR_ARGUMENT;
+        };
+        let Some(index) = read(h) else {
+            return ERR_STATE;
         };
         match index.validate() {
             Ok(()) => 0,
@@ -294,10 +354,13 @@ pub unsafe extern "C" fn vs_validate(handle: *const c_void, message: *mut u8, ca
 /// # Safety
 /// `out` must point to 3 writable i64.
 #[no_mangle]
-pub unsafe extern "C" fn vs_export_sizes(handle: *const c_void, out: *mut i64) -> i32 {
+pub unsafe extern "C" fn vs_export_sizes(ptr: *const c_void, out: *mut i64) -> i32 {
     guarded(ERR_PANIC, || {
-        let (Some(index), false) = (index_ref(handle), out.is_null()) else {
+        let (Some(h), false) = (handle(ptr), out.is_null()) else {
             return ERR_ARGUMENT;
+        };
+        let Some(index) = read(h) else {
+            return ERR_STATE;
         };
         let (levels, edges) = index.export();
         *out = levels.len() as i64;
@@ -307,25 +370,34 @@ pub unsafe extern "C" fn vs_export_sizes(handle: *const c_void, out: *mut i64) -
     })
 }
 
-/// Fill caller buffers sized by `vs_export_sizes`: `levels[slots]` and `edges[edge_count*3]`
-/// as `(level, src, dst)` triples. Vectors are not exported; the caller owns the originals.
+/// Fill `levels` (capacity `levels_cap` ints) and `edges` (capacity `edge_cap` triples of
+/// `(level, src, dst)`). Returns `ERR_CAPACITY` without writing if either is too small, e.g.
+/// because the index changed since `vs_export_sizes`. Vectors are not exported.
 ///
 /// # Safety
-/// Buffers must have the sizes reported by `vs_export_sizes`.
+/// `levels` holds `levels_cap` ints and `edges` holds `edge_cap * 3` ints.
 #[no_mangle]
 pub unsafe extern "C" fn vs_export(
-    handle: *const c_void,
+    ptr: *const c_void,
     levels: *mut i32,
+    levels_cap: u64,
     edges: *mut i32,
+    edge_cap: u64,
 ) -> i32 {
     guarded(ERR_PANIC, || {
-        let Some(index) = index_ref(handle) else {
+        let Some(h) = handle(ptr) else {
             return ERR_ARGUMENT;
         };
         if levels.is_null() || edges.is_null() {
             return ERR_ARGUMENT;
         }
+        let Some(index) = read(h) else {
+            return ERR_STATE;
+        };
         let (lv, ed) = index.export();
+        if lv.len() as u64 > levels_cap || ed.len() as u64 > edge_cap {
+            return ERR_CAPACITY;
+        }
         std::ptr::copy_nonoverlapping(lv.as_ptr(), levels, lv.len());
         for (i, e) in ed.iter().enumerate() {
             std::ptr::copy_nonoverlapping(e.as_ptr(), edges.add(i * 3), 3);
@@ -335,10 +407,11 @@ pub unsafe extern "C" fn vs_export(
 }
 
 /// Build an index from persisted topology; slot `i` holds `vectors[i*dim..]`. Null on any
-/// inconsistency (the Python layer then rebuilds from vectors).
+/// inconsistency or implausible size (the Python layer then rebuilds from vectors).
 ///
 /// # Safety
-/// Arrays must have the lengths given by `slots` and `edge_count`.
+/// `vectors` holds `slots*dim` floats, `levels` holds `slots` ints, `edges` holds
+/// `edge_count*3` ints.
 #[no_mangle]
 pub unsafe extern "C" fn vs_import(
     dim: u32,
@@ -354,16 +427,19 @@ pub unsafe extern "C" fn vs_import(
     entry: i64,
 ) -> *mut c_void {
     guarded(std::ptr::null_mut(), || {
-        if dim == 0 || m < 2 || ef_construction < m || (slots > 0 && (vectors.is_null() || levels.is_null())) {
+        if !params_ok(dim, m, ef_construction) || slots as usize > MAX_SLOTS {
             return std::ptr::null_mut();
         }
-        if edge_count > 0 && edges.is_null() {
+        if (slots > 0 && (vectors.is_null() || levels.is_null())) || (edge_count > 0 && edges.is_null()) {
             return std::ptr::null_mut();
         }
         let (slots, edge_count) = (slots as usize, edge_count as usize);
-        let vec_slice = if slots == 0 { &[][..] } else { slice::from_raw_parts(vectors, slots * dim as usize) };
+        let (Some(vec_len), Some(edge_len)) = ((slots).checked_mul(dim as usize), edge_count.checked_mul(3)) else {
+            return std::ptr::null_mut();
+        };
+        let vec_slice = if slots == 0 { &[][..] } else { slice::from_raw_parts(vectors, vec_len) };
         let level_slice = if slots == 0 { &[][..] } else { slice::from_raw_parts(levels, slots) };
-        let flat = if edge_count == 0 { &[][..] } else { slice::from_raw_parts(edges, edge_count * 3) };
+        let flat = if edge_count == 0 { &[][..] } else { slice::from_raw_parts(edges, edge_len) };
         let triples: Vec<[i32; 3]> = flat.as_chunks::<3>().0.to_vec();
         if vec_slice.iter().any(|x| !x.is_finite()) || triples.iter().any(|t| t.iter().any(|&x| x < 0)) {
             return std::ptr::null_mut();
@@ -381,7 +457,7 @@ pub unsafe extern "C" fn vs_import(
             &triples,
             entry,
         ) {
-            Ok(index) => Box::into_raw(Box::new(index)) as *mut c_void,
+            Ok(index) => Box::into_raw(Box::new(Handle { index: RwLock::new(index) })) as *mut c_void,
             Err(_) => std::ptr::null_mut(),
         }
     })
