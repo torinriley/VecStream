@@ -1,4 +1,4 @@
-"""Three reproducible ANN experiments: frontier, insertion order, deletion."""
+"""Reproducible ANN experiments: frontier, insertion order, deletion, filtered search."""
 
 from __future__ import annotations
 
@@ -185,10 +185,53 @@ def deletion(args: argparse.Namespace, vectors: np.ndarray, queries: np.ndarray)
     }
 
 
+def filtered(args: argparse.Namespace, vectors: np.ndarray, queries: np.ndarray) -> dict:
+    """Post-filtering a widened candidate list versus constraining the traversal itself."""
+    index, _ = build(vectors, np.arange(len(vectors)), args, args.graph_seed)
+    labels = np.random.default_rng(args.dataset_seed + 1).random(len(vectors))
+    ef = args.ef_search[0]
+    rows = []
+    for selectivity in [0.5, 0.1, 0.02]:
+        allowed = {str(i) for i in np.flatnonzero(labels < selectivity)}
+        truth = exact_truth({i: vectors[int(i)] for i in allowed}, queries, args.k)
+        strategies = {
+            "post_filter": lambda q, allowed=allowed: [
+                r
+                for r in index.search(q, k=max(args.k * 100, 1000), ef_search=ef)
+                if r[0] in allowed
+            ][: args.k],
+            "in_traversal": lambda q, allowed=allowed: index.search(
+                q, k=args.k, ef_search=ef, predicate=allowed.__contains__
+            ),
+        }
+        for name, run in strategies.items():
+            for query in queries[: args.warmups]:
+                run(query)
+            latencies, recalls = [], []
+            for query, expected in zip(queries, truth, strict=True):
+                started = time.perf_counter_ns()
+                actual = {item_id for item_id, _ in run(query)}
+                latencies.append((time.perf_counter_ns() - started) / 1e6)
+                recalls.append(len(expected & actual) / min(args.k, len(expected)))
+            rows.append(
+                {
+                    "selectivity": selectivity,
+                    "matching_vectors": len(allowed),
+                    "strategy": name,
+                    f"recall@{args.k}": statistics.mean(recalls),
+                    "p50_ms": float(np.percentile(latencies, 50)),
+                    "p99_ms": float(np.percentile(latencies, 99)),
+                }
+            )
+    return {"ef_search": ef, "rows": rows}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--experiment", choices=["frontier", "insertion-order", "deletion"], default="frontier"
+        "--experiment",
+        choices=["frontier", "insertion-order", "deletion", "filtered"],
+        default="frontier",
     )
     parser.add_argument("--vectors", type=int, default=10_000)
     parser.add_argument("--queries", type=int, default=100)
@@ -205,9 +248,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     vectors, queries = dataset(args.vectors, args.dim, args.queries, args.dataset_seed)
-    runner = {"frontier": frontier, "insertion-order": insertion_order, "deletion": deletion}[
-        args.experiment
-    ]
+    runner = {
+        "frontier": frontier,
+        "insertion-order": insertion_order,
+        "deletion": deletion,
+        "filtered": filtered,
+    }[args.experiment]
     result = {
         "environment": environment(),
         "experiment": args.experiment,

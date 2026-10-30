@@ -1,0 +1,88 @@
+{
+  "environment": {
+    "vecstream_revision": "ec754e19922bff83be6b42010083dabc8791e6bc",
+    "working_tree_dirty": true,
+    "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
+    "architecture": "x86_64",
+    "processor": "x86_64",
+    "python": "3.13.17",
+    "numpy": "2.5.3"
+  },
+  "experiment": "filtered",
+  "configuration": {
+    "experiment": "filtered",
+    "vectors": 6000,
+    "queries": 40,
+    "dim": 32,
+    "k": 10,
+    "M": 16,
+    "ef_construction": 60,
+    "ef_search": [
+      40
+    ],
+    "warmups": 5,
+    "dataset_seed": 42,
+    "graph_seed": 43,
+    "order_seeds": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "deletion_seed": 44
+  },
+  "results": {
+    "ef_search": 40,
+    "rows": [
+      {
+        "selectivity": 0.5,
+        "matching_vectors": 2995,
+        "strategy": "post_filter",
+        "recall@10": 1.0,
+        "p50_ms": 63.360547499999996,
+        "p99_ms": 77.71450222
+      },
+      {
+        "selectivity": 0.5,
+        "matching_vectors": 2995,
+        "strategy": "in_traversal",
+        "recall@10": 0.9925,
+        "p50_ms": 17.1763555,
+        "p99_ms": 20.46678711
+      },
+      {
+        "selectivity": 0.1,
+        "matching_vectors": 628,
+        "strategy": "post_filter",
+        "recall@10": 1.0,
+        "p50_ms": 43.1235075,
+        "p99_ms": 71.28375023999999
+      },
+      {
+        "selectivity": 0.1,
+        "matching_vectors": 628,
+        "strategy": "in_traversal",
+        "recall@10": 1.0,
+        "p50_ms": 31.4822365,
+        "p99_ms": 47.71964698
+      },
+      {
+        "selectivity": 0.02,
+        "matching_vectors": 132,
+        "strategy": "post_filter",
+        "recall@10": 1.0,
+        "p50_ms": 46.778397,
+        "p99_ms": 69.37591035
+      },
+      {
+        "selectivity": 0.02,
+        "matching_vectors": 132,
+        "strategy": "in_traversal",
+        "recall@10": 1.0,
+        "p50_ms": 55.8466525,
+        "p99_ms": 106.71612984999999
+      }
+    ]
+  }
+}

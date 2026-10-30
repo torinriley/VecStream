@@ -15,3 +15,4 @@ jobs:
       - run: python -m benchmarks.ann_benchmark --experiment frontier --vectors 300 --queries 10 --dim 32 --ef-search 10 20
       - run: python -m benchmarks.ann_benchmark --experiment insertion-order --vectors 300 --queries 10 --dim 32 --ef-search 20 --order-seeds 1 2
       - run: python -m benchmarks.ann_benchmark --experiment deletion --vectors 300 --queries 10 --dim 32 --ef-search 20
+      - run: python -m benchmarks.ann_benchmark --experiment filtered --vectors 300 --queries 10 --dim 32 --ef-search 20
