@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 import numpy as np
 
 from .binary_store import BinaryVectorStore
-from .errors import ClosedError, CorruptStoreError, StoreLockedError
+from .errors import ClosedError, CorruptStoreError, InvalidVectorError, StoreLockedError
 from .hnsw_index import HNSWIndex
 from .hnsw_persist import dump_index, load_index
 from .rwlock import ReadWriteLock
@@ -311,7 +311,10 @@ class Collection:
             if not isinstance(item_id, str) or not item_id or len(item_id) > MAX_ID_LENGTH:
                 raise ValueError(f"id must be a non-empty string of at most {MAX_ID_LENGTH} chars")
             if kind == "put":
-                vector = as_float32_vector(operation.get("vector"), dimension)
+                raw_vector = operation.get("vector")
+                if raw_vector is None:
+                    raise InvalidVectorError("a put operation requires a vector")
+                vector = as_float32_vector(raw_vector, dimension)
                 metadata = operation.get("metadata")
                 if metadata is not None:
                     if not isinstance(metadata, dict):
