@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The readers-writer lock is now phase-fair: a continuous stream of writes could previously starve searches indefinitely.
 
 ### Changed
+- New collections default to `M=32` (was 16) with `ef_construction=200`: on GloVe-100 at 1.18M vectors this gives roughly half the search latency at equal recall, for ~20% more index memory and ~2.9x longer builds. Existing collections keep their saved parameters; omitted keys at creation are now filled from the manager defaults and saved.
 - Correct HNSW level generation, diversity selection, reciprocal pruning, and stable float32 normalization.
 - Reduced the supported architecture to `Collection`, `BinaryVectorStore`, and `HNSWIndex`.
 
@@ -48,4 +49,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Collections/namespaces for organizing vectors
 - Metadata filtering support
 - Binary persistence layer
-- CLI interface for basic operations 
+- CLI interface for basic operations

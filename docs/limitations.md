@@ -29,3 +29,17 @@
   | 1,183,514 | 640 | 0.942 | 4.23 / 7.58 | 260 / 1,016 |
 
   Full 1.18M build: 1,153s (1,026 inserts/s), about 830 MB of additional resident memory for the index. Reaching 0.95 recall at 1M requires roughly ef_search 700+ at this M; raising M and ef_construction would trade build time and memory for recall and has not been tuned. Single runs on one machine: expect variance, and treat latencies as indicative.
+- Index tuning (native engine, GloVe-100 angular, single runs, 4 cores; `benchmarks/results/tuning/`). Raising `M` is the effective lever; raising `ef_construction` past 200 is not:
+
+  | Vectors | M / ef_construction | Build | Extra memory | recall@10 at ef_search 80 / 160 / 320 | p50 ms at ef_search 160 |
+  | --- | --- | --- | --- | --- | --- |
+  | 100,000 | 16 / 100 | 70s | 87 MB | 0.868 / 0.926 / 0.966 | 0.66 |
+  | 100,000 | 16 / 200 | 72s | 87 MB | 0.873 / 0.935 / 0.972 | 0.75 |
+  | 100,000 | 24 / 200 | 113s | 92 MB | 0.916 / 0.963 / 0.988 | 0.75 |
+  | 100,000 | 32 / 200 | 155s | 96 MB | 0.936 / 0.975 / 0.994 | 0.79 |
+  | 100,000 | 32 / 400 | 218s | 96 MB | 0.941 / 0.980 / 0.996 | 0.83 |
+  | 100,000 | 48 / 400 | 364s | 105 MB | 0.962 / 0.988 / 0.998 | 0.98 |
+  | 1,183,514 | 16 / 100 | 1,153s | 829 MB | 0.786 / 0.854 / 0.905 | 1.10 |
+  | 1,183,514 | 32 / 200 | 3,284s | 992 MB | 0.875 / 0.925 / 0.960 | 1.78 |
+
+  At 1.18M vectors M=32 reaches ~0.96 recall at ef_search 320 (2.7 ms p50) where M=16 needs ef_search 640 for 0.94 (4.2 ms), i.e. roughly half the latency at equal recall, in exchange for ~2.9x the build time (part of that is ef_construction 200 vs 100) and ~20% more memory. New collections therefore default to `M=32, ef_construction=200`. Collections that already saved their parameters keep them; keys missing from old saved parameters keep their old meaning (`M=16`). Changing a collection's parameters makes it rebuild its graph on the next open. These are single runs on one machine and one dataset: expect variance, and re-tune for your own data.
