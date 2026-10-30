@@ -32,6 +32,23 @@ migration: the persisted graph is shared.
 3. Startup loads the newest generation whose checksums verify, restores the graph (rebuilding only if it fails
    validation), and replays log records newer than the checkpoint. The server reports `/v1/readyz` only afterwards.
 
+## Backup and restore
+
+`POST /v1/collections/{c}/backup` (admin) writes a verified, self-contained backup to
+`<data-dir>/backups/<tenant>/<id>` while the collection keeps serving: writes and searches pause only for a
+checkpoint and for hard-linking that checkpoint's immutable files; copying and verification run outside the lock.
+It includes the persisted graph, so a restore does not rebuild the index. A backup is a point-in-time snapshot
+taken at the checkpoint (writes acknowledged before the call are included). `POST /v1/collections/{new}/restore`
+verifies every component checksum first, then creates the collection atomically; it never overwrites an existing
+collection (`409`) and a damaged backup is refused with `422`. Offline equivalents, with the server stopped
+(it holds the storage lock): `python -m vecstream backup --data-dir D --collection C --to PATH`,
+`restore --data-dir D --collection NEW --from PATH`, and `verify-backup PATH` (any machine).
+
+Backups live under the data directory by default; copy them to another disk or host to protect against losing
+that disk. Backups are not encrypted, and a backup directory has the same sensitivity as the collection.
+Restoring with a different engine works (the graph is engine-agnostic); a backup of a quantized collection needs
+the native engine unless `hnsw_params` overrides `quantization`. Test a restore before you need one.
+
 ## Shutdown
 
 `SIGTERM`/`SIGINT`: readiness fails, the listener stops, in-flight requests finish (up to `--drain-timeout`),
@@ -47,4 +64,4 @@ every collection is checkpointed, and storage locks are released. `kill -9` is a
 - Watch `vecstream_checkpoint_failures`, `vecstream_wal_bytes` (growing means checkpoints are failing),
   `vecstream_index_isolated_nodes`, `vecstream_http_request_duration_seconds`, and `vecstream_process_resident_memory_bytes`.
 
-Backups: stop writes (or call checkpoint) and copy the collection directory; no point-in-time restore yet.
+Backups: see "Backup and restore" above. There is no point-in-time recovery between backups.
