@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- HNSW deletion repair and in-traversal filtered search (#36)
+
+### Added
 - HNSW deletion now repairs the neighborhoods it leaves behind (recall after 20% random deletion: 0.952 vs 0.954 rebuilt, previously 0.916) and no longer scans every node to pick a new entry point.
 - Filtered ANN search: metadata filters and similarity thresholds are enforced during graph traversal, with an exact-scan fallback for highly selective filters, instead of post-filtering a widened candidate list.
 - `filtered` benchmark experiment; vectorized neighbor selection and pruning.
