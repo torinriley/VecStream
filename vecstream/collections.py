@@ -459,6 +459,36 @@ class Collection:
             self._check_open()
             return self._search_locked(query, k, threshold, ef_search, filter_metadata)
 
+    def search_batch(
+        self,
+        queries: Sequence[Sequence[float]],
+        k: int = 5,
+        threshold: float = 0.0,
+        ef_search: Optional[int] = None,
+        filter_metadata: Optional[Dict[str, Any]] = None,
+    ) -> List[List[Tuple[str, float]]]:
+        """Run many queries against one consistent snapshot.
+
+        All queries are validated before any is executed, and all see the same
+        state (the read lock is held throughout). Without HNSW or filters the
+        exact path is a single matrix product. HNSW traversal is Python-bound
+        and threads do not speed it up, so those queries run sequentially.
+        """
+        with self._lock.read():
+            self._check_open()
+            if len(queries) == 0:
+                raise ValueError("a batch must contain at least one query")
+            if k < 1:
+                raise ValueError("k must be at least 1")
+            for query in queries:
+                as_float32_vector(query, self.store.dimension)
+            if not (self.use_hnsw and self.hnsw_index is not None) and not filter_metadata:
+                return self.store.search_batch(queries, k=k, threshold=threshold)
+            return [
+                self._search_locked(query, k, threshold, ef_search, filter_metadata)
+                for query in queries
+            ]
+
     def search_detailed(
         self,
         query: Sequence[float],

@@ -333,3 +333,29 @@ def test_filtered_search_over_http_fills_k_for_selective_filters(env):
         "POST", "/v1/collections/f/search", {"vector": [1, 1, 1], "k": 3, "threshold": 0.999}
     )
     assert status == 200 and all(r["score"] >= 0.999 - 1e-6 for r in body["results"])
+
+
+def test_batch_search_endpoint(env):
+    server, keys, *_ = env
+    admin, reader = Client(server, keys["a_admin"]), Client(server, keys["a_reader"])
+    admin.call("POST", "/v1/collections", {"name": "b"})
+    ops = [{"op": "put", "id": f"v{i}", "vector": [1, i, 0]} for i in range(30)]
+    admin.call("POST", "/v1/collections/b/batch", {"operations": ops})
+    status, body, _ = reader.call(
+        "POST", "/v1/collections/b/search/batch", {"vectors": [[1, 0, 0], [1, 29, 0]], "k": 2}
+    )
+    assert status == 200 and [r["id"] for r in body["results"][0]][:1] == ["v0"]
+    assert body["results"][1][0]["id"] == "v29"
+    for bad in ({"vectors": []}, {"vectors": [[1, 0, 0], [1]]}, {"vectors": "x"}, {"k": 1}):
+        assert reader.call("POST", "/v1/collections/b/search/batch", bad)[0] == 400
+    server.max_batch_queries = 1
+    assert (
+        reader.call("POST", "/v1/collections/b/search/batch", {"vectors": [[1, 0, 0]] * 2})[0]
+        == 413
+    )
+    assert (
+        Client(server, keys["a_writer_docs"]).call(
+            "POST", "/v1/collections/b/search/batch", {"vectors": [[1, 0, 0]]}
+        )[0]
+        == 403
+    )

@@ -30,6 +30,7 @@ A tenant sees only its own collections (separate storage tree), never another te
 | `GET /v1/collections/{c}` | reader | stats and index/WAL health |
 | `DELETE /v1/collections/{c}` | admin | |
 | `POST /v1/collections/{c}/checkpoint` · `/verify` | admin | verify re-checks checksums and graph invariants |
+| `POST /v1/collections/{c}/search/batch` | reader | `{"vectors": [[...], ...], "k"?, "threshold"?, "ef_search"?, "filter"?}` → `{"results": [[...], ...]}`; ≤ 1,000 queries, one consistent snapshot |
 | `PUT /v1/collections/{c}/vectors/{id}` | writer | `{"vector": [...], "metadata"?: {...}}` upsert (replaces metadata) |
 | `GET` / `DELETE /v1/collections/{c}/vectors/{id}` | reader / writer | |
 | `POST /v1/collections/{c}/batch` | writer | `{"operations": [{"op":"put"\|"del","id",...}]}` — atomic, ≤ 10,000 ops |

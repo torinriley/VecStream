@@ -87,4 +87,32 @@ class VectorStore:
         order = eligible[np.argsort(-scores[eligible], kind="stable")][:k]
         return [(ids[int(i)], float(scores[i])) for i in order]
 
+    def search_batch(
+        self, queries: Sequence[Sequence[float] | np.ndarray], k: int = 5, threshold: float = 0.0
+    ) -> List[List[Tuple[str, float]]]:
+        """Exact top-k for many queries with one normalization and one matrix product.
+
+        Equivalent to calling ``search_similar`` per query, but builds the
+        normalized matrix once instead of once per query.
+        """
+        if k < 1:
+            raise ValueError("k must be at least 1")
+        if not self.vectors:
+            for query in queries:  # still reject malformed input consistently
+                as_float32_vector(query)
+            return [[] for _ in queries]
+        assert self.dimension is not None
+        batch = np.stack([normalize(as_float32_vector(q, self.dimension)) for q in queries])
+        ids = list(self.vectors)
+        matrix = np.stack([self.vectors[item_id] for item_id in ids])
+        norms = np.linalg.norm(matrix.astype(np.float64), axis=1, keepdims=True)
+        normalized = np.divide(matrix, norms, out=np.zeros_like(matrix), where=norms != 0)
+        scores = batch @ normalized.T
+        results: List[List[Tuple[str, float]]] = []
+        for row in scores:
+            eligible = np.flatnonzero(row >= threshold)
+            order = eligible[np.argsort(-row[eligible], kind="stable")][:k]
+            results.append([(ids[int(i)], float(row[i])) for i in order])
+        return results
+
     exact_search = search_similar
