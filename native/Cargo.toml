@@ -2,6 +2,7 @@
 name = "vecstream_native"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 description = "Native HNSW engine for VecStream (C ABI, no dependencies)"
 license = "MIT"
 
