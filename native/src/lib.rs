@@ -16,13 +16,13 @@
 mod distance;
 mod index;
 
-use index::{Filter, Index};
+use index::{Filter, Index, Quantization};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 pub const ERR_ARGUMENT: i32 = -1;
 pub const ERR_PANIC: i32 = -2;
 pub const ERR_STATE: i32 = -3;
@@ -79,16 +79,41 @@ pub extern "C" fn vs_force_scalar(on: i32) {
     distance::force_scalar(on != 0);
 }
 
+fn quantization(code: u32) -> Option<Quantization> {
+    match code {
+        0 => Some(Quantization::None),
+        1 => Some(Quantization::Sq8),
+        _ => None,
+    }
+}
+
 /// Returns null for invalid parameters (`dim` 1..=65536, `m` 2..=1024,
-/// `ef_construction` in `m..=1_000_000`).
+/// `ef_construction` in `m..=1_000_000`, `quant` 0 = float32 or 1 = 8-bit scalar).
 #[no_mangle]
-pub extern "C" fn vs_new(dim: u32, m: u32, ef_construction: u32, ml: i64, seed: u64) -> *mut c_void {
+pub extern "C" fn vs_new(
+    dim: u32,
+    m: u32,
+    ef_construction: u32,
+    ml: i64,
+    seed: u64,
+    quant: u32,
+) -> *mut c_void {
     guarded(std::ptr::null_mut(), || {
+        let Some(quant) = quantization(quant) else {
+            return std::ptr::null_mut();
+        };
         if !params_ok(dim, m, ef_construction) {
             return std::ptr::null_mut();
         }
         let ml = if ml < 0 { None } else { Some(ml as usize) };
-        let index = Index::new(dim as usize, m as usize, ef_construction as usize, ml, seed);
+        let index = Index::with_quantization(
+            dim as usize,
+            m as usize,
+            ef_construction as usize,
+            ml,
+            seed,
+            quant,
+        );
         Box::into_raw(Box::new(Handle { index: RwLock::new(index) })) as *mut c_void
     })
 }
@@ -299,10 +324,10 @@ pub unsafe extern "C" fn vs_search_batch(
     })
 }
 
-/// out[0..5] = nodes, levels, avg level-0 degree, isolated nodes, free slots.
+/// out[0..6] = nodes, levels, avg level-0 degree, isolated nodes, free slots, vector bytes.
 ///
 /// # Safety
-/// `out` must point to 5 writable doubles.
+/// `out` must point to 6 writable doubles.
 #[no_mangle]
 pub unsafe extern "C" fn vs_stats(ptr: *const c_void, out: *mut f64) -> i32 {
     guarded(ERR_PANIC, || {
@@ -313,7 +338,14 @@ pub unsafe extern "C" fn vs_stats(ptr: *const c_void, out: *mut f64) -> i32 {
             return ERR_STATE;
         };
         let s = index.stats();
-        let values = [s.nodes as f64, s.levels as f64, s.avg_degree0, s.isolated0 as f64, s.free_slots as f64];
+        let values = [
+            s.nodes as f64,
+            s.levels as f64,
+            s.avg_degree0,
+            s.isolated0 as f64,
+            s.free_slots as f64,
+            s.vector_bytes as f64,
+        ];
         for (i, v) in values.iter().enumerate() {
             *out.add(i) = *v;
         }
@@ -419,6 +451,7 @@ pub unsafe extern "C" fn vs_import(
     ef_construction: u32,
     ml: i64,
     seed: u64,
+    quant: u32,
     slots: u64,
     vectors: *const f32,
     levels: *const i32,
@@ -427,6 +460,9 @@ pub unsafe extern "C" fn vs_import(
     entry: i64,
 ) -> *mut c_void {
     guarded(std::ptr::null_mut(), || {
+        let Some(quant) = quantization(quant) else {
+            return std::ptr::null_mut();
+        };
         if !params_ok(dim, m, ef_construction) || slots as usize > MAX_SLOTS {
             return std::ptr::null_mut();
         }
@@ -446,12 +482,13 @@ pub unsafe extern "C" fn vs_import(
         }
         let ml = if ml < 0 { None } else { Some(ml as usize) };
         let entry = if entry < 0 { None } else { Some(entry as u32) };
-        match Index::import(
+        match Index::import_with(
             dim as usize,
             m as usize,
             ef_construction as usize,
             ml,
             seed,
+            quant,
             vec_slice,
             level_slice,
             &triples,

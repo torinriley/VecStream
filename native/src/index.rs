@@ -3,7 +3,7 @@
 //! Nodes are addressed by `u32` slots; freed slots are reused. Mutating
 //! methods take `&mut self`; searches take `&self` and may run concurrently.
 
-use crate::distance::distance;
+use crate::distance::{distance, dot_f32_u8, dot_u8};
 use std::cell::RefCell;
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
@@ -27,6 +27,56 @@ type Item = (Ord32, u32);
 /// Hard cap on node level. With the default multiplier the chance of a level
 /// above 64 is below 2^-64, so this only ever rejects corrupt input.
 pub const MAX_LEVEL: usize = 64;
+
+/// How vectors are stored. `Sq8` keeps one byte per dimension plus a 12-byte header and scores
+/// approximately; `None` keeps exact `f32` values.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Quantization {
+    None,
+    Sq8,
+}
+
+/// Per-vector affine decode: `value[i] = offset + scale * code[i]`; `sum` is the sum of the codes.
+#[derive(Clone, Copy, Default)]
+struct Sq8Header {
+    offset: f32,
+    scale: f32,
+    sum: f32,
+}
+
+fn encode_sq8(v: &[f32], out: &mut [u8]) -> Sq8Header {
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for &x in v {
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    if v.is_empty() || hi <= lo {
+        out.fill(0);
+        let offset = if v.is_empty() { 0.0 } else { lo };
+        return Sq8Header { offset, scale: 0.0, sum: 0.0 };
+    }
+    let scale = (hi - lo) / 255.0;
+    let inverse = 1.0 / scale;
+    let mut sum = 0u32;
+    for (o, &x) in out.iter_mut().zip(v) {
+        let code = ((x - lo) * inverse).round().clamp(0.0, 255.0) as u8;
+        *o = code;
+        sum += code as u32;
+    }
+    Sq8Header { offset: lo, scale, sum: sum as f32 }
+}
+
+/// A search query with the values asymmetric scoring needs precomputed once.
+pub struct Query<'a> {
+    v: &'a [f32],
+    sum: f32,
+}
+
+impl<'a> Query<'a> {
+    pub fn new(v: &'a [f32]) -> Self {
+        Query { v, sum: v.iter().sum() }
+    }
+}
 
 thread_local! {
     /// Epoch-stamped visited set: clearing is O(1) instead of O(n) per query.
@@ -67,7 +117,12 @@ pub struct Params {
 
 pub struct Index {
     pub p: Params,
+    quant: Quantization,
+    /// Exact vectors (`Quantization::None`).
     vecs: Vec<f32>,
+    /// Byte codes and decode headers (`Quantization::Sq8`).
+    codes: Vec<u8>,
+    heads: Vec<Sq8Header>,
     /// Level of each slot, or -1 when the slot is free.
     levels: Vec<i32>,
     links: Vec<Vec<Vec<u32>>>,
@@ -90,11 +145,28 @@ pub struct Stats {
     pub avg_degree0: f64,
     pub isolated0: usize,
     pub free_slots: usize,
+    /// Bytes used to store vectors (codes plus headers, or floats).
+    pub vector_bytes: usize,
 }
 
 impl Index {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(dim: usize, m: usize, ef_construction: usize, ml: Option<usize>, seed: u64) -> Self {
+        Self::with_quantization(dim, m, ef_construction, ml, seed, Quantization::None)
+    }
+
+    pub fn with_quantization(
+        dim: usize,
+        m: usize,
+        ef_construction: usize,
+        ml: Option<usize>,
+        seed: u64,
+        quant: Quantization,
+    ) -> Self {
         Index {
+            quant,
+            codes: Vec::new(),
+            heads: Vec::new(),
             p: Params {
                 dim,
                 m,
@@ -134,13 +206,60 @@ impl Index {
         self.ep
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn quantization(&self) -> Quantization {
+        self.quant
+    }
+
     fn vec(&self, slot: u32) -> &[f32] {
+        debug_assert_eq!(self.quant, Quantization::None);
         let start = slot as usize * self.p.dim;
         &self.vecs[start..start + self.p.dim]
     }
 
+    fn code(&self, slot: u32) -> &[u8] {
+        let start = slot as usize * self.p.dim;
+        &self.codes[start..start + self.p.dim]
+    }
+
+    /// The stored vector as floats (decoded when quantized).
+    pub fn vector(&self, slot: u32) -> Vec<f32> {
+        match self.quant {
+            Quantization::None => self.vec(slot).to_vec(),
+            Quantization::Sq8 => {
+                let h = self.heads[slot as usize];
+                self.code(slot).iter().map(|&c| h.offset + h.scale * c as f32).collect()
+            }
+        }
+    }
+
+    /// Distance between two stored nodes.
     fn dist(&self, a: u32, b: u32) -> f32 {
-        distance(self.vec(a), self.vec(b))
+        match self.quant {
+            Quantization::None => distance(self.vec(a), self.vec(b)),
+            Quantization::Sq8 => {
+                let (x, y) = (self.heads[a as usize], self.heads[b as usize]);
+                let (xo, xs, xsum) = (x.offset as f64, x.scale as f64, x.sum as f64);
+                let (yo, ys, ysum) = (y.offset as f64, y.scale as f64, y.sum as f64);
+                let cross = dot_u8(self.code(a), self.code(b)) as f64;
+                let dot = self.p.dim as f64 * xo * yo + xo * ys * ysum + yo * xs * xsum
+                    + xs * ys * cross;
+                (1.0 - dot).clamp(0.0, 2.0) as f32
+            }
+        }
+    }
+
+    /// Distance from a query to a stored node.
+    fn qd(&self, q: &Query, slot: u32) -> f32 {
+        match self.quant {
+            Quantization::None => distance(q.v, self.vec(slot)),
+            Quantization::Sq8 => {
+                let h = self.heads[slot as usize];
+                let dot = h.offset as f64 * q.sum as f64
+                    + h.scale as f64 * dot_f32_u8(q.v, self.code(slot)) as f64;
+                (1.0 - dot).clamp(0.0, 2.0) as f32
+            }
+        }
     }
 
     fn limit(&self, level: usize) -> usize {
@@ -174,12 +293,12 @@ impl Index {
 
     // ---- search -----------------------------------------------------------------------
 
-    fn greedy(&self, q: &[f32], mut entry: u32, level: usize) -> u32 {
-        let mut best = distance(q, self.vec(entry));
+    fn greedy(&self, q: &Query, mut entry: u32, level: usize) -> u32 {
+        let mut best = self.qd(q, entry);
         loop {
             let mut moved = false;
             for &nb in &self.links[entry as usize][level] {
-                let d = distance(q, self.vec(nb));
+                let d = self.qd(q, nb);
                 if d < best {
                     best = d;
                     entry = nb;
@@ -192,9 +311,9 @@ impl Index {
         }
     }
 
-    fn search_layer(&self, q: &[f32], ep: u32, ef: usize, level: usize) -> Vec<(f32, u32)> {
+    fn search_layer(&self, q: &Query, ep: u32, ef: usize, level: usize) -> Vec<(f32, u32)> {
         with_visited(self.levels.len(), |visit| {
-            let d0 = distance(q, self.vec(ep));
+            let d0 = self.qd(q, ep);
             let mut candidates: BinaryHeap<Reverse<Item>> = BinaryHeap::new();
             let mut results: BinaryHeap<Item> = BinaryHeap::new();
             candidates.push(Reverse((Ord32(d0), ep)));
@@ -208,7 +327,7 @@ impl Index {
                     if visit(nb) {
                         continue;
                     }
-                    let d = distance(q, self.vec(nb));
+                    let d = self.qd(q, nb);
                     if results.len() < ef || d < results.peek().unwrap().0 .0 {
                         candidates.push(Reverse((Ord32(d), nb)));
                         results.push((Ord32(d), nb));
@@ -228,7 +347,7 @@ impl Index {
     /// Returns `(results, exact_fallback_used)`.
     fn search_filtered(
         &self,
-        q: &[f32],
+        q: &Query,
         entry: u32,
         k: usize,
         ef: usize,
@@ -238,7 +357,7 @@ impl Index {
             d <= filter.max_distance && filter.predicate.is_none_or(|p| p(slot))
         };
         let (mut results_out, exhausted) = with_visited(self.levels.len(), |visit| {
-            let d0 = distance(q, self.vec(entry));
+            let d0 = self.qd(q, entry);
             let mut candidates: BinaryHeap<Reverse<Item>> = BinaryHeap::new();
             let mut results: BinaryHeap<Item> = BinaryHeap::new();
             candidates.push(Reverse((Ord32(d0), entry)));
@@ -257,7 +376,7 @@ impl Index {
                         continue;
                     }
                     visited += 1;
-                    let d = distance(q, self.vec(nb));
+                    let d = self.qd(q, nb);
                     if results.len() < ef || d < results.peek().unwrap().0 .0 {
                         candidates.push(Reverse((Ord32(d), nb)));
                         if qualifies(nb, d) {
@@ -279,7 +398,7 @@ impl Index {
         if exhausted {
             let mut all: Vec<(f32, u32)> = (0..self.levels.len() as u32)
                 .filter(|&s| self.levels[s as usize] >= 0)
-                .map(|s| (distance(q, self.vec(s)), s))
+                .map(|s| (self.qd(q, s), s))
                 .filter(|&(d, s)| qualifies(s, d))
                 .collect();
             all.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -302,18 +421,19 @@ impl Index {
         let Some(mut entry) = self.ep else {
             return (Vec::new(), false);
         };
+        let query = Query::new(q);
         let top = self.levels[entry as usize] as usize;
         for level in (1..=top).rev() {
-            entry = self.greedy(q, entry, level);
+            entry = self.greedy(&query, entry, level);
         }
         let ef = ef.max(k);
         let (hits, fallback) = match filter {
             None => {
-                let mut r = self.search_layer(q, entry, ef, 0);
+                let mut r = self.search_layer(&query, entry, ef, 0);
                 r.truncate(k);
                 (r, false)
             }
-            Some(f) => self.search_filtered(q, entry, k, ef, f),
+            Some(f) => self.search_filtered(&query, entry, k, ef, f),
         };
         (hits.into_iter().map(|(d, s)| (s, 1.0 - d)).collect(), fallback)
     }
@@ -363,16 +483,31 @@ impl Index {
     pub fn add(&mut self, vector: &[f32]) -> u32 {
         debug_assert_eq!(vector.len(), self.p.dim);
         let level = self.random_level();
+        let dim = self.p.dim;
         let slot = match self.free.pop() {
             Some(slot) => {
-                let start = slot as usize * self.p.dim;
-                self.vecs[start..start + self.p.dim].copy_from_slice(vector);
+                let start = slot as usize * dim;
+                match self.quant {
+                    Quantization::None => self.vecs[start..start + dim].copy_from_slice(vector),
+                    Quantization::Sq8 => {
+                        self.heads[slot as usize] =
+                            encode_sq8(vector, &mut self.codes[start..start + dim]);
+                    }
+                }
                 self.levels[slot as usize] = level as i32;
                 self.links[slot as usize] = vec![Vec::new(); level + 1];
                 slot
             }
             None => {
-                self.vecs.extend_from_slice(vector);
+                match self.quant {
+                    Quantization::None => self.vecs.extend_from_slice(vector),
+                    Quantization::Sq8 => {
+                        let start = self.codes.len();
+                        self.codes.resize(start + dim, 0);
+                        let header = encode_sq8(vector, &mut self.codes[start..start + dim]);
+                        self.heads.push(header);
+                    }
+                }
                 self.levels.push(level as i32);
                 self.links.push(vec![Vec::new(); level + 1]);
                 (self.levels.len() - 1) as u32
@@ -385,11 +520,12 @@ impl Index {
         };
         let entry_level = self.levels[ep as usize] as usize;
         let mut entry = ep;
+        let query = Query::new(vector);
         for l in ((level + 1)..=entry_level).rev() {
-            entry = self.greedy(vector, entry, l);
+            entry = self.greedy(&query, entry, l);
         }
         for l in (0..=level.min(entry_level)).rev() {
-            let candidates = self.search_layer(vector, entry, self.p.ef_construction, l);
+            let candidates = self.search_layer(&query, entry, self.p.ef_construction, l);
             let neighbors = self.select(&candidates, self.limit(l));
             self.links[slot as usize][l] = neighbors.clone();
             for &n in &neighbors {
@@ -520,6 +656,10 @@ impl Index {
             avg_degree0: if self.count == 0 { 0.0 } else { degree_sum as f64 / self.count as f64 },
             isolated0: isolated,
             free_slots: self.free.len(),
+            vector_bytes: match self.quant {
+                Quantization::None => self.vecs.len() * 4,
+                Quantization::Sq8 => self.codes.len() + self.heads.len() * 12,
+            },
         }
     }
 
@@ -547,8 +687,9 @@ impl Index {
             if self.links[s as usize].len() != level + 1 {
                 return Err(format!("slot {s} has {} link layers for level {level}", self.links[s as usize].len()));
             }
-            let norm: f32 = self.vec(s).iter().map(|x| x * x).sum::<f32>().sqrt();
-            if !norm.is_finite() || !(norm < 1e-6 || (norm - 1.0).abs() < 1e-4) {
+            let norm: f32 = self.vector(s).iter().map(|x| x * x).sum::<f32>().sqrt();
+            let tolerance = if self.quant == Quantization::Sq8 { 0.05 } else { 1e-4 };
+            if !norm.is_finite() || !(norm < 1e-6 || (norm - 1.0).abs() < tolerance) {
                 return Err(format!("slot {s} has norm {norm}"));
             }
             for l in 0..=level {
@@ -594,6 +735,7 @@ impl Index {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(test), allow(dead_code))]
     /// Rebuild from exported topology; slot `i` holds `vectors[i]` (already normalized).
     pub fn import(
         dim: usize,
@@ -606,6 +748,33 @@ impl Index {
         edges: &[[i32; 3]],
         ep: Option<u32>,
     ) -> Result<Index, String> {
+        Self::import_with(
+            dim,
+            m,
+            ef_construction,
+            ml,
+            seed,
+            Quantization::None,
+            vectors,
+            levels,
+            edges,
+            ep,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn import_with(
+        dim: usize,
+        m: usize,
+        ef_construction: usize,
+        ml: Option<usize>,
+        seed: u64,
+        quant: Quantization,
+        vectors: &[f32],
+        levels: &[i32],
+        edges: &[[i32; 3]],
+        ep: Option<u32>,
+    ) -> Result<Index, String> {
         let n = levels.len();
         if levels.iter().any(|&l| l > MAX_LEVEL as i32) {
             return Err(format!("node level exceeds the maximum of {MAX_LEVEL}"));
@@ -613,8 +782,18 @@ impl Index {
         if n.checked_mul(dim) != Some(vectors.len()) {
             return Err("vector slab length does not match node count".into());
         }
-        let mut index = Index::new(dim, m, ef_construction, ml, seed);
-        index.vecs = vectors.to_vec();
+        let mut index = Index::with_quantization(dim, m, ef_construction, ml, seed, quant);
+        match quant {
+            Quantization::None => index.vecs = vectors.to_vec(),
+            Quantization::Sq8 => {
+                index.codes = vec![0u8; n * dim];
+                index.heads = (0..n)
+                    .map(|i| {
+                        encode_sq8(&vectors[i * dim..(i + 1) * dim], &mut index.codes[i * dim..(i + 1) * dim])
+                    })
+                    .collect();
+            }
+        }
         index.levels = levels.to_vec();
         index.links = levels
             .iter()
@@ -670,7 +849,7 @@ mod tests {
     fn brute(index: &Index, q: &[f32], k: usize, keep: impl Fn(u32) -> bool) -> Vec<u32> {
         let mut all: Vec<(f32, u32)> = (0..index.slots() as u32)
             .filter(|&s| index.level_of(s).is_some() && keep(s))
-            .map(|s| (distance(q, index.vec(s)), s))
+            .map(|s| (distance(q, &index.vector(s)), s))
             .collect();
         all.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         all.into_iter().take(k).map(|(_, s)| s).collect()
@@ -769,7 +948,7 @@ mod tests {
             index.remove(s);
         }
         let (levels, edges) = index.export();
-        let slab: Vec<f32> = (0..levels.len() as u32).flat_map(|s| index.vec(s).to_vec()).collect();
+        let slab: Vec<f32> = (0..levels.len() as u32).flat_map(|s| index.vector(s)).collect();
         let copy = Index::import(16, 8, 48, None, 1, &slab, &levels, &edges, index.entry_point()).unwrap();
         for q in 0..10 {
             let query = unit(900 + q, 16);
@@ -781,7 +960,7 @@ mod tests {
     fn import_rejects_corrupt_topology() {
         let index = build(20, 8);
         let (levels, mut edges) = index.export();
-        let slab: Vec<f32> = (0..levels.len() as u32).flat_map(|s| index.vec(s).to_vec()).collect();
+        let slab: Vec<f32> = (0..levels.len() as u32).flat_map(|s| index.vector(s)).collect();
         edges.push([0, 0, 9999]);
         assert!(Index::import(8, 8, 48, None, 1, &slab, &levels, &edges, index.entry_point()).is_err());
         let (levels, mut edges) = index.export();
@@ -806,5 +985,159 @@ mod tests {
         }
         assert!(index.stats().levels <= 2);
         index.validate().unwrap();
+    }
+
+    // ---- 8-bit scalar quantization ------------------------------------------------------
+
+    fn build_sq8(n: usize, dim: usize) -> Index {
+        let mut index = Index::with_quantization(dim, 8, 48, None, 7, Quantization::Sq8);
+        for i in 0..n {
+            index.add(&unit(i as u64 + 1, dim));
+        }
+        index
+    }
+
+    /// Recall against exact search over the ORIGINAL float vectors, not the decoded ones.
+    fn recall_vs_originals(index: &Index, n: usize, queries: usize, ef: usize) -> f64 {
+        let dim = index.p.dim;
+        let originals: Vec<Vec<f32>> = (0..n).map(|i| unit(i as u64 + 1, dim)).collect();
+        let mut hits = 0;
+        for q in 0..queries {
+            let query = unit(10_000 + q as u64, dim);
+            let mut all: Vec<(f32, usize)> =
+                originals.iter().enumerate().map(|(i, v)| (distance(&query, v), i)).collect();
+            all.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let truth: Vec<u32> = all.iter().take(10).map(|&(_, i)| i as u32).collect();
+            let (found, _) = index.search(&query, 10, ef, None);
+            hits += found.iter().filter(|(s, _)| truth.contains(s)).count();
+        }
+        hits as f64 / (10 * queries) as f64
+    }
+
+    #[test]
+    fn sq8_encoding_error_is_bounded_by_half_a_quantization_step() {
+        for seed in 1..20u64 {
+            let v = unit(seed, 64);
+            let mut codes = vec![0u8; 64];
+            let h = encode_sq8(&v, &mut codes);
+            let step = h.scale;
+            for (&x, &c) in v.iter().zip(&codes) {
+                let decoded = h.offset + h.scale * c as f32;
+                assert!((x - decoded).abs() <= step / 2.0 + 1e-6, "seed {seed}");
+            }
+            assert_eq!(h.sum as u32, codes.iter().map(|&c| c as u32).sum::<u32>());
+        }
+    }
+
+    #[test]
+    fn sq8_degenerate_vectors_are_well_defined() {
+        for v in [vec![0.0f32; 8], vec![0.5f32; 8], vec![-1.0f32; 3], vec![1.0f32]] {
+            let mut codes = vec![0u8; v.len()];
+            let h = encode_sq8(&v, &mut codes);
+            assert!(h.offset.is_finite() && h.scale == 0.0 && h.sum == 0.0);
+            assert!(codes.iter().all(|&c| c == 0));
+            for &x in &v {
+                assert_eq!(h.offset + h.scale * 0.0, x);
+            }
+        }
+        let mut index = Index::with_quantization(4, 4, 16, None, 1, Quantization::Sq8);
+        let zero = index.add(&[0.0; 4]);
+        let one = index.add(&[1.0, 0.0, 0.0, 0.0]);
+        let (hits, _) = index.search(&[1.0, 0.0, 0.0, 0.0], 2, 8, None);
+        assert_eq!(hits[0].0, one);
+        assert!((hits[0].1 - 1.0).abs() < 0.01 && hits[1].0 == zero && hits[1].1.abs() < 0.01);
+        index.validate().unwrap();
+    }
+
+    #[test]
+    fn sq8_distances_track_exact_distances() {
+        let dim = 64;
+        let mut index = Index::with_quantization(dim, 8, 48, None, 1, Quantization::Sq8);
+        let originals: Vec<Vec<f32>> = (1..=30u64).map(|i| unit(i, dim)).collect();
+        for v in &originals {
+            index.add(v);
+        }
+        let mut worst_node = 0.0f32;
+        let mut worst_query = 0.0f32;
+        for (i, a) in originals.iter().enumerate() {
+            let query = Query::new(a);
+            for (j, b) in originals.iter().enumerate() {
+                let exact = distance(a, b);
+                worst_node = worst_node.max((index.dist(i as u32, j as u32) - exact).abs());
+                worst_query = worst_query.max((index.qd(&query, j as u32) - exact).abs());
+            }
+        }
+        assert!(worst_node < 0.02, "node-node error {worst_node}");
+        assert!(worst_query < 0.02, "query-node error {worst_query}");
+    }
+
+    #[test]
+    fn sq8_graph_is_valid_and_keeps_most_of_the_recall() {
+        let index = build_sq8(600, 32);
+        index.validate().unwrap();
+        let float_index = build(600, 32);
+        let exact_recall = recall(&float_index, 40, 64);
+        let quantized_recall = recall_vs_originals(&index, 600, 40, 64);
+        assert!(quantized_recall > 0.9, "sq8 recall {quantized_recall}");
+        assert!(quantized_recall > exact_recall - 0.06, "{quantized_recall} vs {exact_recall}");
+    }
+
+    #[test]
+    fn sq8_uses_about_a_quarter_of_the_vector_memory() {
+        let (float_index, sq8_index) = (build(300, 128), build_sq8(300, 128));
+        let (f, q) = (float_index.stats().vector_bytes, sq8_index.stats().vector_bytes);
+        assert_eq!(f, 300 * 128 * 4);
+        assert_eq!(q, 300 * (128 + 12));
+        assert!((q as f64) < 0.3 * f as f64, "{q} vs {f}");
+    }
+
+    #[test]
+    fn sq8_removal_repair_slot_reuse_and_export_round_trip() {
+        let mut index = build_sq8(300, 16);
+        for s in (0..300).step_by(3) {
+            assert!(index.remove(s));
+            index.validate().unwrap();
+        }
+        let slot = index.add(&unit(9000, 16));
+        assert!(index.level_of(slot).is_some());
+        index.validate().unwrap();
+        assert!(recall(&index, 30, 64) > 0.8);
+
+        let (levels, edges) = index.export();
+        let slab: Vec<f32> = (0..levels.len() as u32).flat_map(|s| index.vector(s)).collect();
+        let copy = Index::import_with(
+            16, 8, 48, None, 1, Quantization::Sq8, &slab, &levels, &edges, index.entry_point(),
+        )
+        .unwrap();
+        assert_eq!(copy.quantization(), Quantization::Sq8);
+        for q in 0..10 {
+            let query = unit(700 + q, 16);
+            assert_eq!(index.search(&query, 10, 50, None).0, copy.search(&query, 10, 50, None).0);
+        }
+    }
+
+    #[test]
+    fn sq8_filtered_search_and_score_bounds_work() {
+        let index = build_sq8(500, 16);
+        let query = unit(77, 16);
+        let even = |s: u32| s % 2 == 0;
+        let filter = Filter { predicate: Some(&even), max_distance: f32::INFINITY, max_visits: 2000 };
+        let (hits, fallback) = index.search(&query, 10, 64, Some(&filter));
+        assert!(!fallback && hits.len() == 10 && hits.iter().all(|(s, _)| s % 2 == 0));
+        let bounded = Filter { predicate: None, max_distance: 0.9, max_visits: 5000 };
+        let (hits, _) = index.search(&query, 50, 100, Some(&bounded));
+        assert!(hits.iter().all(|(_, score)| *score >= 0.1 - 1e-4));
+    }
+
+    #[test]
+    fn sq8_import_rejects_corrupt_topology_like_the_float_index() {
+        let index = build_sq8(20, 8);
+        let (levels, mut edges) = index.export();
+        let slab: Vec<f32> = (0..levels.len() as u32).flat_map(|s| index.vector(s)).collect();
+        edges.pop();
+        assert!(Index::import_with(
+            8, 8, 48, None, 1, Quantization::Sq8, &slab, &levels, &edges, index.entry_point()
+        )
+        .is_err());
     }
 }

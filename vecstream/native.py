@@ -27,10 +27,11 @@ from .errors import CorruptStoreError, IndexInvariantError
 from .rwlock import ReadWriteLock
 from .vector_store import as_float32_vector, normalize
 
-ABI_VERSION = 2
+ABI_VERSION = 3
 MAX_DIM = 65_536  # mirrors the limits enforced inside the native library
 MAX_M = 1_024
 MAX_EF = 1_000_000
+QUANTIZATIONS = {"none": 0, "sq8": 1}
 _LIB_NAME = {"darwin": "libvecstream_native.dylib", "win32": "vecstream_native.dll"}.get(
     sys.platform, "libvecstream_native.so"
 )
@@ -57,7 +58,10 @@ def _bind(lib: ctypes.CDLL) -> None:
         "vs_abi_version": (c.c_uint32, []),
         "vs_simd_kind": (c.c_int32, []),
         "vs_force_scalar": (None, [c.c_int32]),
-        "vs_new": (c.c_void_p, [c.c_uint32, c.c_uint32, c.c_uint32, c.c_int64, c.c_uint64]),
+        "vs_new": (
+            c.c_void_p,
+            [c.c_uint32, c.c_uint32, c.c_uint32, c.c_int64, c.c_uint64, c.c_uint32],
+        ),
         "vs_free": (None, [c.c_void_p]),
         "vs_add": (c.c_int64, [c.c_void_p, f32p]),
         "vs_remove": (c.c_int32, [c.c_void_p, c.c_uint32]),
@@ -99,8 +103,8 @@ def _bind(lib: ctypes.CDLL) -> None:
         "vs_export": (c.c_int32, [c.c_void_p, i32p, c.c_uint64, i32p, c.c_uint64]),
         "vs_import": (
             c.c_void_p,
-            [c.c_uint32, c.c_uint32, c.c_uint32, c.c_int64, c.c_uint64, c.c_uint64, f32p, i32p]
-            + [c.c_uint64, i32p, c.c_int64],
+            [c.c_uint32, c.c_uint32, c.c_uint32, c.c_int64, c.c_uint64, c.c_uint32, c.c_uint64]
+            + [f32p, i32p, c.c_uint64, i32p, c.c_int64],
         ),
     }
     for name, (restype, argtypes) in sig.items():
@@ -166,6 +170,11 @@ class NativeHNSWIndex:
 
     ``nodes`` maps item ID to its internal slot (membership, length, and
     iteration match ``HNSWIndex.nodes``; values are slots, not vectors).
+
+    ``quantization="sq8"`` stores each vector as one byte per dimension plus a
+    12-byte header (about 3.6x smaller at 100 dimensions). Scores are then
+    approximate: re-rank the top candidates against the original vectors when
+    exact scores matter (``Collection`` does this automatically).
     """
 
     def __init__(
@@ -175,7 +184,10 @@ class NativeHNSWIndex:
         ef_construction: int = 200,
         ml: int | None = None,
         seed: int | None = None,
+        quantization: str = "none",
     ) -> None:
+        if quantization not in QUANTIZATIONS:
+            raise ValueError(f"quantization must be one of {sorted(QUANTIZATIONS)}")
         if not (1 <= dim <= MAX_DIM and 2 <= M <= MAX_M and M <= ef_construction <= MAX_EF):
             raise ValueError(
                 f"require 1 <= dim <= {MAX_DIM}, 2 <= M <= {MAX_M}, "
@@ -186,8 +198,16 @@ class NativeHNSWIndex:
             raise RuntimeError(f"native engine unavailable: {_load_error}")
         self._lib = lib
         self.dim, self.M, self.ef_construction, self.ml = dim, M, ef_construction, ml
+        self.quantization = quantization
         self._seed = int.from_bytes(os.urandom(8), "little") if seed is None else seed
-        handle = lib.vs_new(dim, M, ef_construction, -1 if ml is None else ml, self._seed)
+        handle = lib.vs_new(
+            dim,
+            M,
+            ef_construction,
+            -1 if ml is None else ml,
+            self._seed,
+            QUANTIZATIONS[quantization],
+        )
         if not handle:
             raise RuntimeError("native engine rejected the index parameters")
         self._attach(handle, {}, [])
@@ -210,9 +230,14 @@ class NativeHNSWIndex:
         levels: np.ndarray,
         edges: np.ndarray,
         ep: int | None,
+        quantization: str = "none",
     ) -> "NativeHNSWIndex":
-        """Restore a persisted graph; slot ``i`` is ``ids[i]``. Raises ``CorruptStoreError``."""
-        self = cls(dim, M, ef_construction, ml)
+        """Restore a persisted graph; slot ``i`` is ``ids[i]``. Raises ``CorruptStoreError``.
+
+        The topology is independent of how vectors are stored, so a graph saved
+        with one quantization loads with another (vectors are re-encoded).
+        """
+        self = cls(dim, M, ef_construction, ml, quantization=quantization)
         assert self._handle is not None
         self._lib.vs_free(self._handle)
         self._handle = None
@@ -227,6 +252,7 @@ class NativeHNSWIndex:
             ef_construction,
             -1 if ml is None else ml,
             self._seed,
+            QUANTIZATIONS[quantization],
             len(ids),
             _ptr(slab, ctypes.c_float),
             _ptr(level_array, ctypes.c_int32),
@@ -400,7 +426,7 @@ class NativeHNSWIndex:
             raise IndexInvariantError("ID map and native index disagree on node count")
 
     def stats(self) -> Dict[str, float]:
-        out = (ctypes.c_double * 5)()
+        out = (ctypes.c_double * 6)()
         with self._lock.read():
             self._lib.vs_stats(self._live(), out)
         return {
@@ -408,6 +434,7 @@ class NativeHNSWIndex:
             "levels": int(out[1]),
             "avg_degree": float(out[2]),
             "isolated": int(out[3]),
+            "vector_bytes": int(out[5]),
         }
 
     def export_topology(self, order: Sequence[str]) -> Tuple[np.ndarray, np.ndarray, Optional[int]]:

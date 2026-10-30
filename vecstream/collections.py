@@ -32,7 +32,7 @@ from .hnsw_index import HNSWIndex
 from .hnsw_persist import dump_index, load_index
 from .native import MAX_EF, MAX_M, NativeHNSWIndex, native_available
 from .rwlock import ReadWriteLock
-from .vector_store import as_float32_vector
+from .vector_store import as_float32_vector, normalize
 from .wal import WriteAheadLog, fsync_directory
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,12 @@ logger = logging.getLogger(__name__)
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_ID_LENGTH = 512
 MAX_METADATA_BYTES = 1 << 20
-_HNSW_KEYS = {"M", "ef_construction", "ml"}
+_HNSW_KEYS = {"M", "ef_construction", "ml", "quantization"}
+QUANTIZATION_MODES = ("none", "sq8")
+# Quantized searches fetch this many times k candidates and re-rank them exactly.
+RESCORE_FACTOR = 4
+# Allowance for quantization error when a similarity threshold is pushed into the traversal.
+QUANTIZED_SCORE_MARGIN = 0.02
 # New collections use M=32: on GloVe-100 it reaches the same recall at roughly half the search
 # latency at 1M vectors, for ~20% more index memory and ~2-3x slower builds (docs/limitations.md).
 DEFAULT_HNSW_PARAMS: Dict[str, Any] = {"M": 32, "ef_construction": 200}
@@ -71,6 +76,8 @@ def validate_hnsw_params(params: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError(f"ef_construction must be an integer between M and {MAX_EF}")
     if ml is not None and (not isinstance(ml, int) or isinstance(ml, bool) or ml < 0):
         raise ValueError("ml must be a non-negative integer or null")
+    if params.get("quantization", "none") not in QUANTIZATION_MODES:
+        raise ValueError(f"quantization must be one of {list(QUANTIZATION_MODES)}")
     return dict(params)
 
 
@@ -175,6 +182,12 @@ class Collection:
             else "python"
         )
         self._index_class: Any = NativeHNSWIndex if self.engine == "native" else HNSWIndex
+        self.quantization: str = self.hnsw_params.get("quantization", "none")
+        if self.quantization != "none" and self.engine != "native":
+            raise ValueError(
+                f"quantization={self.quantization!r} requires the native engine "
+                "(python -m vecstream.native build)"
+            )
         self.allow_stale_checkpoint = allow_stale_checkpoint
         self.hnsw_index: Any = None
         self._lock = ReadWriteLock()
@@ -270,7 +283,11 @@ class Collection:
             return False
         try:
             index = load_index(
-                files, list(self.store.vectors), self.store.vectors, self._index_class
+                files,
+                list(self.store.vectors),
+                self.store.vectors,
+                self._index_class,
+                quantization=self.quantization,
             )
         except (CorruptStoreError, KeyError) as exc:
             logger.warning(
@@ -301,6 +318,8 @@ class Collection:
         if self.store.dimension is None:
             return
         params = self._index_params()
+        if self.engine == "native":
+            params["quantization"] = self.quantization
         self.hnsw_index = self._index_class(dim=self.store.dimension, **params)
         for item_id, vector in self.store.vectors.items():
             self.hnsw_index.add_item(item_id, vector)
@@ -512,6 +531,18 @@ class Collection:
                 return self.store.search_batch(queries, k=k, threshold=threshold)
             if self.engine == "native" and self.hnsw_index is not None and not filter_metadata:
                 # Native threads run the whole batch without holding the GIL.
+                if self.quantization != "none":
+                    fetch = k * RESCORE_FACTOR
+                    rows = self.hnsw_index.search_batch(
+                        queries,
+                        k=fetch,
+                        ef_search=max(ef_search or 0, fetch),
+                        min_score=threshold - QUANTIZED_SCORE_MARGIN if threshold > 0 else None,
+                    )
+                    return [
+                        self._rescore(query, row, k, threshold)
+                        for query, row in zip(queries, rows, strict=True)
+                    ]
                 rows = self.hnsw_index.search_batch(
                     queries,
                     k=k,
@@ -550,6 +581,16 @@ class Collection:
     ) -> List[Tuple[str, float]]:
         # If using HNSW index
         if self.use_hnsw and self.hnsw_index is not None:
+            if self.quantization != "none":
+                fetch = k * RESCORE_FACTOR
+                rows = self.hnsw_index.search(
+                    query,
+                    k=fetch,
+                    ef_search=max(ef_search or 0, fetch),
+                    predicate=self._metadata_predicate(filter_metadata),
+                    min_score=threshold - QUANTIZED_SCORE_MARGIN if threshold > 0 else None,
+                )
+                return self._rescore(query, rows, k, threshold)
             if filter_metadata or threshold > 0.0:
                 # Constraints are enforced during graph traversal, not after it.
                 predicate = self._metadata_predicate(filter_metadata)
@@ -578,6 +619,24 @@ class Collection:
             else:
                 # No filtering needed
                 return self.store.search_similar(query, k=k, threshold=threshold)
+
+    def _rescore(
+        self,
+        query: Sequence[float],
+        candidates: List[Tuple[str, float]],
+        k: int,
+        threshold: float,
+    ) -> List[Tuple[str, float]]:
+        """Re-rank approximate candidates with exact cosine scores from the stored vectors."""
+        if not candidates:
+            return []
+        unit = normalize(as_float32_vector(query, self.store.dimension)).astype(np.float64)
+        ids = [item_id for item_id, _ in candidates]
+        matrix = np.stack([self.store.vectors[item_id] for item_id in ids]).astype(np.float64)
+        norms = np.linalg.norm(matrix, axis=1)
+        scores = np.divide(matrix @ unit, norms, out=np.zeros(len(ids)), where=norms > 0)
+        order = np.argsort(-scores, kind="stable")
+        return [(ids[i], float(scores[i])) for i in order if scores[i] >= threshold][:k]
 
     def _metadata_predicate(
         self, filter_metadata: Optional[Dict[str, Any]]
@@ -665,6 +724,8 @@ class Collection:
                 "last_checkpoint_time": self.last_checkpoint_time,
                 "checkpoint_failures": self.checkpoint_failures,
                 "engine": self.engine if index is not None else None,
+                "quantization": self.quantization,
+                "index_vector_bytes": stats.get("vector_bytes", 0),
                 "index_nodes": stats.get("nodes", 0),
                 "index_levels": stats.get("levels", 0),
                 "index_avg_degree": stats.get("avg_degree", 0.0),

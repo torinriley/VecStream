@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- 8-bit scalar quantization (`hnsw_params: {"quantization": "sq8"}`, native engine only): index vector storage drops about 3.6x with unchanged recall after exact re-ranking of `4*k` candidates (GloVe-100, 100K vectors). The persisted graph is reused when the mode changes. Native ABI is now version 3 (rebuild the library); the Python engine rejects quantization explicitly.
 - Native HNSW engine in Rust (`native/`, no dependencies, C ABI via ctypes): contiguous vector slab, AVX2+FMA distance kernel with portable fallback, deletion repair, filtered traversal, GIL-free concurrent search, and multi-threaded batch search. Selected automatically when built; pure-Python engine remains the fallback. Checkpoints are engine-agnostic.
 - `python -m vecstream.native build`, `serve --engine`, `--engine` for the benchmark harness, CI jobs for the Rust crate (tests, clippy) and the native test pass.
 - Batch search (`Collection.search_batch`, `POST /v1/collections/{c}/search/batch`): validated all-or-nothing, one consistent snapshot, and a single matrix product on the exact path.

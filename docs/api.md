@@ -26,7 +26,7 @@ A tenant sees only its own collections (separate storage tree), never another te
 | `GET /v1/diagnostics` | operator | memory, latency bounds, per-collection health |
 | `POST /v1/admin/checkpoint` | operator | checkpoint every open collection |
 | `GET /v1/collections` | reader | names visible to the key |
-| `POST /v1/collections` | admin | `{"name", "use_hnsw"?, "hnsw_params"?: {"M","ef_construction","ml"}}` → `201` |
+| `POST /v1/collections` | admin | `{"name", "use_hnsw"?, "hnsw_params"?: {"M","ef_construction","ml","quantization"}}` → `201` |
 | `GET /v1/collections/{c}` | reader | stats and index/WAL health |
 | `DELETE /v1/collections/{c}` | admin | |
 | `POST /v1/collections/{c}/checkpoint` · `/verify` | admin | verify re-checks checksums and graph invariants |

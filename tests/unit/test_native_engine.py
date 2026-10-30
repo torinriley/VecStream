@@ -348,7 +348,7 @@ def test_creating_and_dropping_many_indexes_does_not_grow_memory():
 def test_abi_version_matches_the_python_bindings():
     from vecstream.native import ABI_VERSION
 
-    assert load_library().vs_abi_version() == ABI_VERSION == 2
+    assert load_library().vs_abi_version() == ABI_VERSION == 3
 
 
 def test_implausible_parameters_are_rejected_instead_of_aborting_the_process():
@@ -359,7 +359,7 @@ def test_implausible_parameters_are_rejected_instead_of_aborting_the_process():
         (4, 16, 2_000_000),
         (70_000, 16, 100),
     ]:
-        assert not lib.vs_new(dim, m, ef, -1, 1), (dim, m, ef)
+        assert not lib.vs_new(dim, m, ef, -1, 1, 0), (dim, m, ef)
     for kwargs in ({"M": 10**9, "ef_construction": 10**9}, {"M": 16, "ef_construction": 10**7}):
         with pytest.raises(ValueError):
             NativeHNSWIndex(8, **kwargs)
@@ -370,17 +370,27 @@ def test_implausible_parameters_are_rejected_instead_of_aborting_the_process():
             validate_hnsw_params(bad)
 
 
+def test_unknown_quantization_codes_are_rejected_at_the_boundary():
+    lib = load_library()
+    assert not lib.vs_new(4, 8, 16, -1, 1, 2)
+    assert not lib.vs_new(4, 8, 16, -1, 1, 4_000_000_000)
+    assert lib.vs_new(4, 8, 16, -1, 1, 1)  # sq8 is valid
+    vectors = (ctypes.c_float * 2)(1, 0)
+    levels = (ctypes.c_int32 * 1)(0)
+    assert not lib.vs_import(2, 4, 16, -1, 1, 7, 1, vectors, levels, 0, None, 0)
+
+
 def test_import_rejects_absurd_levels_without_allocating_them():
     lib = load_library()
     vectors = (ctypes.c_float * 2)(1, 0)
     for level in (65, 2_000_000_000):
         levels = (ctypes.c_int32 * 1)(level)
-        assert not lib.vs_import(2, 4, 16, -1, 1, 1, vectors, levels, 0, None, 0)
+        assert not lib.vs_import(2, 4, 16, -1, 1, 0, 1, vectors, levels, 0, None, 0)
 
 
 def test_export_refuses_undersized_buffers_and_never_writes_past_them():
     lib = load_library()
-    handle = lib.vs_new(2, 4, 16, -1, 1)
+    handle = lib.vs_new(2, 4, 16, -1, 1, 0)
     try:
         for i in range(20):
             assert lib.vs_add(handle, (ctypes.c_float * 2)(1.0, float(i))) >= 0
@@ -433,11 +443,11 @@ def test_raw_handle_is_safe_under_unsynchronized_threads():
 
 def test_raw_ffi_rejects_bad_arguments():
     lib = load_library()
-    assert not lib.vs_new(0, 16, 100, -1, 1)
-    assert not lib.vs_new(4, 1, 100, -1, 1)
+    assert not lib.vs_new(0, 16, 100, -1, 1, 0)
+    assert not lib.vs_new(4, 1, 100, -1, 1, 0)
     assert lib.vs_len(None) < 0
     assert lib.vs_remove(None, 0) < 0
-    handle = lib.vs_new(3, 4, 16, -1, 1)
+    handle = lib.vs_new(3, 4, 16, -1, 1, 0)
     try:
         assert lib.vs_remove(handle, 12345) == 0  # unknown slot is a no-op, not a crash
         nan = (ctypes.c_float * 3)(1.0, float("nan"), 0.0)
