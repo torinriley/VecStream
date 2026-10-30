@@ -30,7 +30,7 @@ from .binary_store import BinaryVectorStore
 from .errors import ClosedError, CorruptStoreError, InvalidVectorError, StoreLockedError
 from .hnsw_index import HNSWIndex
 from .hnsw_persist import dump_index, load_index
-from .native import NativeHNSWIndex, native_available
+from .native import MAX_EF, MAX_M, NativeHNSWIndex, native_available
 from .rwlock import ReadWriteLock
 from .vector_store import as_float32_vector
 from .wal import WriteAheadLog, fsync_directory
@@ -60,10 +60,10 @@ def validate_hnsw_params(params: Dict[str, Any]) -> Dict[str, Any]:
     m = params.get("M", 16)
     ef = params.get("ef_construction", 200)
     ml = params.get("ml")
-    if not isinstance(m, int) or isinstance(m, bool) or m < 2:
-        raise ValueError("M must be an integer >= 2")
-    if not isinstance(ef, int) or isinstance(ef, bool) or ef < m:
-        raise ValueError("ef_construction must be an integer >= M")
+    if not isinstance(m, int) or isinstance(m, bool) or not 2 <= m <= MAX_M:
+        raise ValueError(f"M must be an integer between 2 and {MAX_M}")
+    if not isinstance(ef, int) or isinstance(ef, bool) or not m <= ef <= MAX_EF:
+        raise ValueError(f"ef_construction must be an integer between M and {MAX_EF}")
     if ml is not None and (not isinstance(ml, int) or isinstance(ml, bool) or ml < 0):
         raise ValueError("ml must be a non-negative integer or null")
     return dict(params)
