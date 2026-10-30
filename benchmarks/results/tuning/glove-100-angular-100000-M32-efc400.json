@@ -1,0 +1,106 @@
+{
+  "environment": {
+    "vecstream_revision": "f063b556077bb5f2f4e8b0d16e8dc3d3f4ae67b6",
+    "working_tree_dirty": false,
+    "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
+    "architecture": "x86_64",
+    "processor": "x86_64",
+    "python": "3.13.17",
+    "numpy": "2.5.3"
+  },
+  "dataset": {
+    "file": "glove-100-angular.hdf5",
+    "distance": "angular",
+    "dimension": 100
+  },
+  "configuration": {
+    "count": 100000,
+    "queries": 1000,
+    "k": 10,
+    "M": 32,
+    "ef_construction": 400,
+    "ef_search": [
+      20,
+      40,
+      80,
+      160,
+      320
+    ],
+    "engine": "native"
+  },
+  "results": {
+    "vectors": 100000,
+    "queries": 1000,
+    "ground_truth_seconds": 1.2693251460000283,
+    "build_seconds": 218.32417192000003,
+    "inserts_per_second": 458.0344866103179,
+    "approx_index_memory_mb": 96.34765625,
+    "search": [
+      {
+        "ef_search": 20,
+        "recall@10": 0.7873,
+        "p50_ms": 0.177614,
+        "p95_ms": 0.26703335,
+        "p99_ms": 0.30476823,
+        "qps_single_thread": 5328.931351827052,
+        "batch_qps_by_threads": {
+          "1": 6334.416110976022,
+          "2": 10947.387697673299,
+          "4": 16329.70457359342
+        }
+      },
+      {
+        "ef_search": 40,
+        "recall@10": 0.8774,
+        "p50_ms": 0.31729050000000003,
+        "p95_ms": 0.58622125,
+        "p99_ms": 0.6724374,
+        "qps_single_thread": 2793.891055509494,
+        "batch_qps_by_threads": {
+          "1": 4741.595424906927,
+          "2": 7282.719534681328,
+          "4": 11549.173708015638
+        }
+      },
+      {
+        "ef_search": 80,
+        "recall@10": 0.9411,
+        "p50_ms": 0.5313135,
+        "p95_ms": 0.6828801999999998,
+        "p99_ms": 0.88698526,
+        "qps_single_thread": 1876.5986626719884,
+        "batch_qps_by_threads": {
+          "1": 2533.0944868408646,
+          "2": 5101.54000647494,
+          "4": 11141.799216295663
+        }
+      },
+      {
+        "ef_search": 160,
+        "recall@10": 0.9797,
+        "p50_ms": 0.834707,
+        "p95_ms": 1.1227116,
+        "p99_ms": 1.41180402,
+        "qps_single_thread": 1193.5088068412135,
+        "batch_qps_by_threads": {
+          "1": 1279.425310809577,
+          "2": 2618.0289458549546,
+          "4": 5063.990175008355
+        }
+      },
+      {
+        "ef_search": 320,
+        "recall@10": 0.9959,
+        "p50_ms": 1.6512475,
+        "p95_ms": 2.7553596,
+        "p99_ms": 3.90116016,
+        "qps_single_thread": 568.6824461411376,
+        "batch_qps_by_threads": {
+          "1": 604.423423016889,
+          "2": 1096.5765061317372,
+          "4": 2966.1820218891685
+        }
+      }
+    ]
+  }
+}
