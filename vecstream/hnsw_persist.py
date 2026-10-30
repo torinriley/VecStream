@@ -33,6 +33,7 @@ def dump_index(index: Any, ids: Sequence[str]) -> Dict[str, bytes]:
         "M": index.M,
         "ef_construction": index.ef_construction,
         "ml": index.ml,
+        "quantization": getattr(index, "quantization", "none"),
         "nodes": len(ids),
         "ep": entry,
     }
@@ -47,6 +48,7 @@ def load_index(
     ids: Sequence[str],
     vectors: Mapping[str, np.ndarray],
     index_class: Type[Any],
+    quantization: str = "none",
 ) -> Any:
     """Rebuild an index of ``index_class`` from persisted topology and the stored vectors.
 
@@ -75,6 +77,7 @@ def load_index(
             levels,
             edges,
             meta["ep"],
+            quantization=quantization,
         )
     except CorruptStoreError:
         raise
