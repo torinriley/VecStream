@@ -41,6 +41,11 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_ID_LENGTH = 512
 MAX_METADATA_BYTES = 1 << 20
 _HNSW_KEYS = {"M", "ef_construction", "ml"}
+# New collections use M=32: on GloVe-100 it reaches the same recall at roughly half the search
+# latency at 1M vectors, for ~20% more index memory and ~2-3x slower builds (docs/limitations.md).
+DEFAULT_HNSW_PARAMS: Dict[str, Any] = {"M": 32, "ef_construction": 200}
+# Keys absent from parameters saved by older versions mean what they meant when saved.
+LEGACY_HNSW_PARAMS: Dict[str, Any] = {"M": 16, "ef_construction": 200}
 
 
 def validate_name(name: str) -> str:
@@ -57,8 +62,8 @@ def validate_hnsw_params(params: Dict[str, Any]) -> Dict[str, Any]:
     unknown = set(params) - _HNSW_KEYS
     if unknown:
         raise ValueError(f"unknown HNSW parameters: {sorted(unknown)}")
-    m = params.get("M", 16)
-    ef = params.get("ef_construction", 200)
+    m = params.get("M", LEGACY_HNSW_PARAMS["M"])
+    ef = params.get("ef_construction", LEGACY_HNSW_PARAMS["ef_construction"])
     ml = params.get("ml")
     if not isinstance(m, int) or isinstance(m, bool) or not 2 <= m <= MAX_M:
         raise ValueError(f"M must be an integer between 2 and {MAX_M}")
@@ -151,7 +156,11 @@ class Collection:
         self.collection_dir = os.path.join(storage_dir, "collections", name)
         os.makedirs(self.collection_dir, exist_ok=True)
         self.use_hnsw = use_hnsw
-        self.hnsw_params = validate_hnsw_params(hnsw_params or {})
+        # None means "use the current defaults"; an explicit (possibly partial) dict is honored
+        # as saved, with missing keys keeping their historical meaning.
+        self.hnsw_params = validate_hnsw_params(
+            dict(DEFAULT_HNSW_PARAMS) if hnsw_params is None else hnsw_params
+        )
         self.sync = sync
         self.checkpoint_ops = checkpoint_ops
         self.checkpoint_bytes = checkpoint_bytes
@@ -280,8 +289,10 @@ class Collection:
 
     def _index_params(self) -> Dict[str, Any]:
         return {
-            "M": self.hnsw_params.get("M", 16),
-            "ef_construction": self.hnsw_params.get("ef_construction", 200),
+            "M": self.hnsw_params.get("M", LEGACY_HNSW_PARAMS["M"]),
+            "ef_construction": self.hnsw_params.get(
+                "ef_construction", LEGACY_HNSW_PARAMS["ef_construction"]
+            ),
             "ml": self.hnsw_params.get("ml"),
         }
 
@@ -686,9 +697,7 @@ class CollectionManager:
         self.metadata_file = os.path.join(base_storage_dir, "collections_metadata.json")
         os.makedirs(self.collections_dir, exist_ok=True)
         self.use_hnsw = use_hnsw
-        self.default_hnsw_params = validate_hnsw_params(
-            default_hnsw_params or {"M": 16, "ef_construction": 200}
-        )
+        self.default_hnsw_params = validate_hnsw_params(default_hnsw_params or DEFAULT_HNSW_PARAMS)
         self.collection_options = collection_options
         self._lock = threading.RLock()
         self._closed = False
@@ -756,9 +765,9 @@ class CollectionManager:
             if name in self.collections or name in self.collections_metadata:
                 raise ValueError(f"Collection '{name}' already exists")
             use_hnsw_flag = self.use_hnsw if use_hnsw is None else use_hnsw
-            hnsw_params_dict = (
-                dict(self.default_hnsw_params) if hnsw_params is None else dict(hnsw_params)
-            )
+            # Fill omitted keys from the manager defaults and save the complete set, so a
+            # collection's parameters never change meaning when defaults change later.
+            hnsw_params_dict = {**self.default_hnsw_params, **(hnsw_params or {})}
             validate_hnsw_params(hnsw_params_dict)
             # A directory without metadata is debris from a crashed create or delete.
             stale = os.path.join(self.collections_dir, name)
@@ -804,7 +813,7 @@ class CollectionManager:
                 name,
                 self.base_storage_dir,
                 metadata.get("use_hnsw", self.use_hnsw),
-                metadata.get("hnsw_params", self.default_hnsw_params),
+                metadata.get("hnsw_params", LEGACY_HNSW_PARAMS),
                 **self.collection_options,
             )
             self.collections[name] = collection
