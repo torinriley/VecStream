@@ -1,4 +1,4 @@
-"""Command line: ``python -m vecstream serve|keys``."""
+"""Command line: ``python -m vecstream serve|keys|backup|restore|verify-backup``."""
 
 from __future__ import annotations
 
@@ -8,10 +8,14 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from .auth import KeyStore
+from .backup import verify_backup
+from .errors import CorruptStoreError, StoreLockedError
 from .server import VecStreamServer
+from .service import VecStreamService
 
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -42,6 +46,20 @@ def _parser() -> argparse.ArgumentParser:
         "--engine", choices=["auto", "native", "python"], default=_env("ENGINE", "auto")
     )
     serve.add_argument("--log-level", default=_env("LOG_LEVEL", "INFO"))
+
+    backup = commands.add_parser(
+        "backup", help="back up one collection (stop the server first; it holds the lock)"
+    )
+    restore = commands.add_parser("restore", help="restore a backup as a new collection")
+    check = commands.add_parser("verify-backup", help="check a backup's integrity")
+    for sub in (backup, restore):
+        sub.add_argument("--data-dir", default=_env("DATA_DIR"), required=_env("DATA_DIR") is None)
+        sub.add_argument("--tenant", default="default")
+        sub.add_argument("--collection", required=True)
+        sub.add_argument("--engine", choices=["auto", "native", "python"], default="auto")
+    backup.add_argument("--to", required=True, help="new backup directory")
+    restore.add_argument("--from", dest="source", required=True, help="backup directory")
+    check.add_argument("path")
 
     keys = commands.add_parser("keys", help="manage API keys")
     keys.add_argument("--keys-file", default=_env("KEYS_FILE"))
@@ -80,6 +98,31 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"revoked {args.key_id}")
         else:
             print(json.dumps(store.list_keys(), indent=2))
+        return 0
+
+    if args.command == "verify-backup":
+        try:
+            info = verify_backup(Path(args.path))
+        except CorruptStoreError as exc:
+            print(f"error: backup failed verification: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(info, indent=2))
+        return 0
+    if args.command in ("backup", "restore"):
+        service = VecStreamService(args.data_dir, engine=args.engine)
+        try:
+            manager = service.manager(args.tenant)
+            if args.command == "backup":
+                info = manager.get_collection(args.collection).backup(args.to)
+            else:
+                manager.restore_collection(args.collection, args.source)
+                info = manager.get_collection_stats(args.collection)
+            print(json.dumps(info, indent=2, default=str))
+        except (CorruptStoreError, StoreLockedError, KeyError, ValueError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            service.close()
         return 0
 
     logging.basicConfig(

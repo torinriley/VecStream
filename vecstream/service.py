@@ -45,6 +45,11 @@ class VecStreamService:
                 self._managers[tenant] = manager
             return manager
 
+    def backup_root(self, tenant: str) -> str:
+        """Per-tenant directory holding that tenant's backups (outside the collection trees)."""
+        validate_tenant(tenant)
+        return os.path.join(self.data_dir, "backups", tenant)
+
     def recover_all(self) -> int:
         """Open every tenant and collection so crash recovery finishes before serving."""
         opened = 0

@@ -214,6 +214,11 @@ class BinaryVectorStore(VectorStore):
         self.extra_files = extras
         self._collect_garbage(keep={generation, previous})
 
+    @property
+    def generation_dir(self) -> Optional[Path]:
+        """Directory of the current immutable checkpoint generation, if one exists."""
+        return self.root / self._generation if self._generation else None
+
     def _save_store(self) -> None:
         if self.autosave:
             self.save_checkpoint()
