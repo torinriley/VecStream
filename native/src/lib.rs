@@ -364,7 +364,7 @@ pub unsafe extern "C" fn vs_import(
         let vec_slice = if slots == 0 { &[][..] } else { slice::from_raw_parts(vectors, slots * dim as usize) };
         let level_slice = if slots == 0 { &[][..] } else { slice::from_raw_parts(levels, slots) };
         let flat = if edge_count == 0 { &[][..] } else { slice::from_raw_parts(edges, edge_count * 3) };
-        let triples: Vec<[i32; 3]> = flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let triples: Vec<[i32; 3]> = flat.as_chunks::<3>().0.to_vec();
         if vec_slice.iter().any(|x| !x.is_finite()) || triples.iter().any(|t| t.iter().any(|&x| x < 0)) {
             return std::ptr::null_mut();
         }
