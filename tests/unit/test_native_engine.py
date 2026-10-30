@@ -345,6 +345,92 @@ def test_creating_and_dropping_many_indexes_does_not_grow_memory():
     assert rss() - before < 60 * 1024 * 1024
 
 
+def test_abi_version_matches_the_python_bindings():
+    from vecstream.native import ABI_VERSION
+
+    assert load_library().vs_abi_version() == ABI_VERSION == 2
+
+
+def test_implausible_parameters_are_rejected_instead_of_aborting_the_process():
+    lib = load_library()
+    for dim, m, ef in [
+        (4, 4_000_000_000, 4_000_000_000),
+        (4, 1025, 2000),
+        (4, 16, 2_000_000),
+        (70_000, 16, 100),
+    ]:
+        assert not lib.vs_new(dim, m, ef, -1, 1), (dim, m, ef)
+    for kwargs in ({"M": 10**9, "ef_construction": 10**9}, {"M": 16, "ef_construction": 10**7}):
+        with pytest.raises(ValueError):
+            NativeHNSWIndex(8, **kwargs)
+    from vecstream.collections import validate_hnsw_params
+
+    for bad in ({"M": 10**9}, {"M": 16, "ef_construction": 10**7}):
+        with pytest.raises(ValueError):
+            validate_hnsw_params(bad)
+
+
+def test_import_rejects_absurd_levels_without_allocating_them():
+    lib = load_library()
+    vectors = (ctypes.c_float * 2)(1, 0)
+    for level in (65, 2_000_000_000):
+        levels = (ctypes.c_int32 * 1)(level)
+        assert not lib.vs_import(2, 4, 16, -1, 1, 1, vectors, levels, 0, None, 0)
+
+
+def test_export_refuses_undersized_buffers_and_never_writes_past_them():
+    lib = load_library()
+    handle = lib.vs_new(2, 4, 16, -1, 1)
+    try:
+        for i in range(20):
+            assert lib.vs_add(handle, (ctypes.c_float * 2)(1.0, float(i))) >= 0
+        sizes = (ctypes.c_int64 * 3)()
+        assert lib.vs_export_sizes(handle, sizes) == 0
+        slots, edge_count = int(sizes[0]), int(sizes[1])
+        lib.vs_add(handle, (ctypes.c_float * 2)(5.0, 5.0))  # index grows after sizing
+        sentinel = -7
+        levels = (ctypes.c_int32 * (slots + 4))(*([sentinel] * (slots + 4)))
+        roomy = (edge_count + 40) * 3  # large enough for the final call's declared capacity
+        edges = (ctypes.c_int32 * roomy)(*([sentinel] * roomy))
+        assert lib.vs_export(handle, levels, slots, edges, edge_count) == -4  # ERR_CAPACITY
+        assert set(levels) == {sentinel} and set(edges) == {sentinel}  # nothing was written
+        assert lib.vs_export(handle, levels, slots + 4, edges, edge_count + 40) == 0
+    finally:
+        lib.vs_free(handle)
+
+
+def test_raw_handle_is_safe_under_unsynchronized_threads():
+    """Mutations and searches from many threads must block, not race (no crash, valid graph)."""
+    index = NativeHNSWIndex(8, M=6, ef_construction=24, seed=1)
+    pool = data(300, 8, seed=2)
+    for i in range(50):
+        index.add_item(f"s{i}", pool[i])
+    stop = threading.Event()
+    errors = []
+
+    def searcher():
+        try:
+            while not stop.is_set():
+                index.search(pool[0], 5, 20)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=searcher) for _ in range(3)]
+    for t in threads:
+        t.start()
+    try:
+        for i in range(50, 250):
+            index.add_item(f"s{i}", pool[i])
+            if i % 3 == 0:
+                index.remove_item(f"s{i - 40}")
+    finally:
+        stop.set()
+        for t in threads:
+            t.join()
+    assert errors == []
+    index.validate()
+
+
 def test_raw_ffi_rejects_bad_arguments():
     lib = load_library()
     assert not lib.vs_new(0, 16, 100, -1, 1)
